@@ -31,18 +31,6 @@ export default {
   'footer.terms': 'Колдонуу шарттары',
   'footer.privacy': 'Купуялык саясаты',
   
-  // Брондоо
-  'booking.checkIn': 'Келүү',
-  'booking.checkOut': 'Кетүү',
-  'booking.guests': 'Коноктор',
-  'booking.adults': 'Чоңдор',
-  'booking.children': 'Балдар',
-  'booking.makeReservation': 'Брондоо',
-  'booking.total': 'Жалпы',
-  'booking.cleaningFee': 'Тазалоо акысы',
-  'booking.deposit': 'Депозит',
-  'booking.selectDates': 'Жеткиликтүүлүк календарынан даталарды тандаңыз',
-  
   // Мүлк
   'property.pricePerNight': '/түн',
   'property.featured': 'Сунушталган жайлар',
