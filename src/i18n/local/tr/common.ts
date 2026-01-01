@@ -81,7 +81,7 @@ export default {
   'home.trustBadge3': 'Turizm Bakanlığı Onaylı otel, villa, bungalov, tekne ve daha fazlası..',
   'home.explore': 'İNCELEYİN',
   'home.exploreVillas': 'Bölgedeki villaları incele',
-  'home.heroTitle': 'Hayalinizdeki\\nKonaklamayı Keşfedin',
+  'home.heroTitle': 'Hayalinizdeki\\nKonaklamayı Keşfedin...',
   'home.heroSubtitle': 'Dünyanın dört bir yanından benzersiz yerler',
   'home.locationLabel': 'Konum',
   'home.locationPlaceholder': 'Nereye gitmek istiyorsunuz?',
