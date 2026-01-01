@@ -28,7 +28,7 @@ export default function AdminExpenses() {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
   const [formData, setFormData] = useState({
-    property_id: '',
+    property_id: '' as string | null,
     expense_type: 'electricity' as ExpenseType,
     description: '',
     amount: '',
@@ -86,6 +86,14 @@ export default function AdminExpenses() {
       // Her expense için property bilgisini al
       const expensesWithProperties = await Promise.all(
         expensesData.map(async (expense: Expense) => {
+          // property_id null ise "Diğer" harcaması
+          if (!expense.property_id) {
+            return {
+              ...expense,
+              property: null
+            };
+          }
+          
           try {
             const propertyResult = await dbQuery('properties')
               .select('*')
@@ -118,6 +126,7 @@ export default function AdminExpenses() {
     try {
       const expenseData = {
         ...formData,
+        property_id: formData.property_id || null,
         amount: parseFloat(formData.amount),
         expense_date: formData.expense_date,
         due_date: formData.due_date || null,
@@ -156,7 +165,7 @@ export default function AdminExpenses() {
   const handleEdit = (expense: ExpenseWithProperty) => {
     setEditingExpense(expense);
     setFormData({
-      property_id: expense.property_id,
+      property_id: expense.property_id || '',
       expense_type: expense.expense_type,
       description: expense.description,
       amount: expense.amount.toString(),
@@ -196,7 +205,7 @@ export default function AdminExpenses() {
     setShowModal(false);
     setEditingExpense(null);
     setFormData({
-      property_id: '',
+      property_id: null,
       expense_type: 'electricity',
       description: '',
       amount: '',
@@ -235,7 +244,10 @@ export default function AdminExpenses() {
   // Filtreleme
   const filteredExpenses = expenses.filter(expense => {
     if (filterType !== 'all' && expense.expense_type !== filterType) return false;
-    if (filterProperty !== 'all' && expense.property_id !== filterProperty) return false;
+    if (filterProperty !== 'all') {
+      if (filterProperty === 'other' && expense.property_id !== null) return false;
+      if (filterProperty !== 'other' && expense.property_id !== filterProperty) return false;
+    }
     if (filterPaid === 'paid' && !expense.is_paid) return false;
     if (filterPaid === 'unpaid' && expense.is_paid) return false;
     if (dateRange.start && expense.expense_date < dateRange.start) return false;
@@ -273,7 +285,7 @@ export default function AdminExpenses() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Muhasebe & Harcama Yönetimi</h1>
-            <p className="text-gray-600 mt-1">Villalara yapılan harcamaları yönetin ve rapor alın</p>
+            <p className="text-gray-600 mt-1">Villa, daire ve firma harcamalarını yönetin ve rapor alın</p>
           </div>
           <button
             onClick={() => setShowModal(true)}
@@ -366,6 +378,7 @@ export default function AdminExpenses() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
               >
                 <option value="all">Tümü</option>
+                <option value="other">Diğer (Firma Harcamaları)</option>
                 {properties.map(prop => (
                   <option key={prop.id} value={prop.id}>{prop.title}</option>
                 ))}
@@ -438,7 +451,7 @@ export default function AdminExpenses() {
                           {new Date(expense.expense_date).toLocaleDateString('tr-TR')}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {expense.property?.title || 'Bilinmeyen'}
+                          {expense.property_id ? (expense.property?.title || 'Bilinmeyen') : 'Diğer (Firma Harcaması)'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
@@ -522,6 +535,25 @@ export default function AdminExpenses() {
             <div>
               <h3 className="font-semibold text-gray-700 mb-3">Villaya Göre</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
+                {/* Diğer (Firma Harcamaları) */}
+                {(() => {
+                  const otherExpenses = filteredExpenses.filter(e => e.property_id === null);
+                  const otherTotal = otherExpenses.reduce((sum, e) => sum + e.amount, 0);
+                  if (otherExpenses.length > 0) {
+                    return (
+                      <div key="other" className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                        <span className="text-sm text-gray-700 truncate">Diğer (Firma Harcamaları)</span>
+                        <div className="text-right">
+                          <span className="text-sm font-semibold text-gray-900">
+                            ₺{otherTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                          <span className="text-xs text-gray-500 ml-2">({otherExpenses.length} kayıt)</span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 {properties.map(prop => {
                   const propExpenses = filteredExpenses.filter(e => e.property_id === prop.id);
                   const propTotal = propExpenses.reduce((sum, e) => sum + e.amount, 0);
@@ -563,14 +595,13 @@ export default function AdminExpenses() {
 
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Villa *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Villa</label>
                   <select
-                    required
-                    value={formData.property_id}
-                    onChange={(e) => setFormData({ ...formData, property_id: e.target.value })}
+                    value={formData.property_id || ''}
+                    onChange={(e) => setFormData({ ...formData, property_id: e.target.value || null })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
                   >
-                    <option value="">Seçiniz</option>
+                    <option value="">Diğer (Firma Harcaması)</option>
                     {properties.map(prop => (
                       <option key={prop.id} value={prop.id}>{prop.title}</option>
                     ))}

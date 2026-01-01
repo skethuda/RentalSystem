@@ -670,7 +670,7 @@ export interface AppUser {
 // Harcama/Muhasebe
 export interface Expense {
   id?: string;
-  property_id: string;
+  property_id: string | null; // null ise "Diğer" (firma harcaması)
   expense_type: 'electricity' | 'water' | 'maintenance' | 'cleaning' | 'other';
   description: string;
   amount: number;
