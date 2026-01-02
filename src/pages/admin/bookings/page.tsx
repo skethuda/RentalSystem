@@ -24,6 +24,9 @@ export default function AdminBookings() {
   const [filter, setFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<BookingWithProperty | null>(null);
+  const [selectedRealtor, setSelectedRealtor] = useState<AppUser | null>(null);
   const [properties, setProperties] = useState<Property[]>([]);
   const [realtors, setRealtors] = useState<AppUser[]>([]);
   const [seasonalPrices, setSeasonalPrices] = useState<SeasonalPrice[]>([]);
@@ -640,6 +643,32 @@ export default function AdminBookings() {
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-2">
                         <button
+                          onClick={async () => {
+                            setSelectedBooking(booking);
+                            // Eğer emlakçı varsa emlakçı bilgisini yükle
+                            if (booking.realtor_id) {
+                              try {
+                                const { data: realtor } = await dbQuery('app_users')
+                                  .select('*')
+                                  .eq('id', booking.realtor_id)
+                                  .single()
+                                  .execute();
+                                setSelectedRealtor(realtor || null);
+                              } catch (error) {
+                                console.error('Emlakçı bilgisi yüklenirken hata:', error);
+                                setSelectedRealtor(null);
+                              }
+                            } else {
+                              setSelectedRealtor(null);
+                            }
+                            setShowDetailModal(true);
+                          }}
+                          className="w-8 h-8 flex items-center justify-center hover:bg-blue-50 text-blue-600 rounded-lg transition-all"
+                          title="Detayları Görüntüle"
+                        >
+                          <i className="ri-eye-line"></i>
+                        </button>
+                        <button
                           onClick={() => deleteBooking(booking.id!)}
                           className="w-8 h-8 flex items-center justify-center hover:bg-red-50 text-red-600 rounded-lg transition-all"
                           title="Sil"
@@ -909,6 +938,222 @@ export default function AdminBookings() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rezervasyon Detay Modal */}
+      {showDetailModal && selectedBooking && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 sticky top-0 bg-white">
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold text-gray-900">Rezervasyon Detayları</h2>
+                <button
+                  onClick={() => {
+                    setShowDetailModal(false);
+                    setSelectedBooking(null);
+                    setSelectedRealtor(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <i className="ri-close-line text-2xl"></i>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Misafir Bilgileri */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <i className="ri-user-line text-[#D4AF37]"></i>
+                  Misafir Bilgileri
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Ad Soyad</p>
+                    <p className="font-medium text-gray-900">{selectedBooking.first_name} {selectedBooking.last_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">E-posta</p>
+                    <p className="font-medium text-gray-900">{selectedBooking.email}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Telefon</p>
+                    <p className="font-medium text-gray-900">{selectedBooking.phone}</p>
+                  </div>
+                  {selectedBooking.reference_code && (
+                    <div>
+                      <p className="text-sm text-gray-600 mb-1">Rezervasyon Kodu</p>
+                      <p className="font-medium text-gray-900">{selectedBooking.reference_code}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Konaklama Bilgileri */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <i className="ri-home-4-line text-[#D4AF37]"></i>
+                  Konaklama Bilgileri
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Konaklama Yeri</p>
+                    <p className="font-medium text-gray-900">{selectedBooking.properties?.title || 'Bilinmiyor'}</p>
+                    <p className="text-sm text-gray-500">{selectedBooking.properties?.city || ''}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Kaynak</p>
+                    <span className={`inline-flex items-center px-3 py-1 rounded text-sm font-medium ${
+                      selectedBooking.source === 'aylin_villas' ? 'bg-[#D4AF37] text-white' :
+                      selectedBooking.source === 'realtor' ? 'bg-orange-100 text-orange-700' :
+                      selectedBooking.source === 'booking.com' ? 'bg-blue-100 text-blue-700' :
+                      selectedBooking.source === 'web' ? 'bg-teal-100 text-teal-700' :
+                      'bg-purple-100 text-purple-700'
+                    }`}>
+                      {selectedBooking.source === 'aylin_villas' ? 'Aylin Villas' :
+                       selectedBooking.source === 'realtor' ? 'Emlakçı' :
+                       selectedBooking.source === 'booking.com' ? 'Booking.com' :
+                       selectedBooking.source === 'web' ? 'Web' :
+                       'Airbnb'}
+                    </span>
+                  </div>
+                </div>
+                {selectedBooking.source === 'realtor' && selectedRealtor && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-sm text-gray-600 mb-1">Emlakçı</p>
+                    <p className="font-medium text-gray-900">
+                      {selectedRealtor.first_name} {selectedRealtor.last_name}
+                      {selectedRealtor.commission_rate && ` (%${selectedRealtor.commission_rate})`}
+                    </p>
+                    {selectedRealtor.email && (
+                      <p className="text-sm text-gray-500">{selectedRealtor.email}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Tarih ve Misafir Bilgileri */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <i className="ri-calendar-line text-[#D4AF37]"></i>
+                  Tarih ve Misafir Bilgileri
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Giriş Tarihi</p>
+                    <p className="font-medium text-gray-900">
+                      {new Date(selectedBooking.check_in_date).toLocaleDateString('tr-TR', { 
+                        weekday: 'long', 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                      })}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Çıkış Tarihi</p>
+                    <p className="font-medium text-gray-900">
+                      {new Date(selectedBooking.check_out_date).toLocaleDateString('tr-TR', { 
+                        weekday: 'long', 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                      })}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Gece Sayısı</p>
+                    <p className="font-medium text-gray-900">
+                      {Math.ceil((new Date(selectedBooking.check_out_date).getTime() - new Date(selectedBooking.check_in_date).getTime()) / (1000 * 60 * 60 * 24))} Gece
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Misafir Sayısı</p>
+                    <p className="font-medium text-gray-900">
+                      {selectedBooking.adults} Yetişkin
+                      {selectedBooking.children > 0 && `, ${selectedBooking.children} Çocuk`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fiyat Bilgileri */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <i className="ri-money-dollar-circle-line text-[#D4AF37]"></i>
+                  Fiyat Bilgileri
+                </h3>
+                <div className="space-y-2">
+                  {selectedBooking.calculated_price && (
+                    <div className="flex justify-between items-center">
+                      <p className="text-sm text-gray-600">Hesaplanan Fiyat</p>
+                      <p className={`font-medium ${Number(selectedBooking.calculated_price) !== Number(selectedBooking.total_amount) ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                        ₺{Number(selectedBooking.calculated_price).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                    <p className="text-sm font-semibold text-gray-900">Toplam Tutar</p>
+                    <p className="text-lg font-bold text-[#D4AF37]">
+                      ₺{Number(selectedBooking.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Durum ve Diğer Bilgiler */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <i className="ri-information-line text-[#D4AF37]"></i>
+                  Durum ve Diğer Bilgiler
+                </h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600 mb-1">Durum</p>
+                    <span className={`inline-flex items-center px-3 py-1 rounded text-sm font-medium ${getStatusColor(selectedBooking.status)}`}>
+                      {getStatusText(selectedBooking.status)}
+                    </span>
+                  </div>
+                  {selectedBooking.created_at && (
+                    <div>
+                      <p className="text-sm text-gray-600 mb-1">Oluşturulma Tarihi</p>
+                      <p className="font-medium text-gray-900">
+                        {new Date(selectedBooking.created_at).toLocaleDateString('tr-TR', { 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                {selectedBooking.special_requests && (
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <p className="text-sm text-gray-600 mb-2">Özel İstekler</p>
+                    <p className="text-sm text-gray-900 bg-white p-3 rounded border border-gray-200">
+                      {selectedBooking.special_requests}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-200 bg-gray-50 flex justify-end">
+              <button
+                onClick={() => {
+                  setShowDetailModal(false);
+                  setSelectedBooking(null);
+                  setSelectedRealtor(null);
+                }}
+                className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                Kapat
+              </button>
+            </div>
           </div>
         </div>
       )}
