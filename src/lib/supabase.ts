@@ -625,7 +625,7 @@ export interface Booking {
   total_amount: number;
   total_price?: number;
   calculated_price?: number; // Sistem tarafından hesaplanan fiyat
-  source?: 'realtor' | 'booking.com' | 'airbnb' | 'aylin_villas'; // Rezervasyon kaynağı
+  source?: 'realtor' | 'booking.com' | 'airbnb' | 'aylin_villas' | 'web'; // Rezervasyon kaynağı
   realtor_id?: string; // Eğer emlakçıdan geldiyse emlakçı ID'si
   status?: string;
   reference_code?: string;

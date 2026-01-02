@@ -41,7 +41,7 @@ export default function AdminBookings() {
     adults: 1,
     children: 0,
     special_requests: '',
-    source: 'aylin_villas' as 'realtor' | 'booking.com' | 'airbnb' | 'aylin_villas',
+    source: 'aylin_villas' as 'realtor' | 'booking.com' | 'airbnb' | 'aylin_villas' | 'web',
     realtor_id: '',
     calculated_price: 0,
     total_amount: 0,
@@ -519,6 +519,16 @@ export default function AdminBookings() {
           >
             Airbnb ({bookings.filter(b => b.source === 'airbnb').length})
           </button>
+          <button
+            onClick={() => setSourceFilter('web')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+              sourceFilter === 'web'
+                ? 'bg-blue-600 text-white'
+                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            Web ({bookings.filter(b => b.source === 'web').length})
+          </button>
         </div>
       </div>
 
@@ -604,11 +614,13 @@ export default function AdminBookings() {
                           booking.source === 'aylin_villas' ? 'bg-[#D4AF37] text-white' :
                           booking.source === 'realtor' ? 'bg-orange-100 text-orange-700' :
                           booking.source === 'booking.com' ? 'bg-blue-100 text-blue-700' :
+                          booking.source === 'web' ? 'bg-teal-100 text-teal-700' :
                           'bg-purple-100 text-purple-700'
                         }`}>
                           {booking.source === 'aylin_villas' ? 'Aylin Villas' :
                            booking.source === 'realtor' ? 'Emlakçı' :
                            booking.source === 'booking.com' ? 'Booking.com' :
+                           booking.source === 'web' ? 'Web' :
                            'Airbnb'}
                         </span>
                       )}
@@ -702,6 +714,7 @@ export default function AdminBookings() {
                     <option value="realtor">Emlakçı</option>
                     <option value="booking.com">Booking.com</option>
                     <option value="airbnb">Airbnb</option>
+                    <option value="web">Web</option>
                   </select>
                 </div>
               </div>
