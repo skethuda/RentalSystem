@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dbQuery } from '../../../lib/supabase';
+import { dbQuery, Booking, Property, LedgerAccount } from '../../../lib/supabase';
 import AdminLayout from '../components/AdminLayout';
 
 interface Stats {
@@ -7,6 +7,12 @@ interface Stats {
   totalBookings: number;
   totalReviews: number;
   activeProperties: number;
+  totalBookingAmount: number;
+  companyRevenue: number;
+}
+
+interface BookingWithProperty extends Booking {
+  properties?: Property;
 }
 
 export default function AdminDashboard() {
@@ -15,11 +21,17 @@ export default function AdminDashboard() {
     totalBookings: 0,
     totalReviews: 0,
     activeProperties: 0,
+    totalBookingAmount: 0,
+    companyRevenue: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [upcomingBookings, setUpcomingBookings] = useState<BookingWithProperty[]>([]);
+  const [checkoutBookings, setCheckoutBookings] = useState<BookingWithProperty[]>([]);
 
   useEffect(() => {
     loadStats();
+    loadUpcomingBookings();
+    loadCheckoutBookings();
   }, []);
 
   const loadStats = async () => {
@@ -29,23 +41,125 @@ export default function AdminDashboard() {
       const properties = await dbQuery('properties').select('id').execute();
       console.log('AdminDashboard: Properties:', properties.data?.length);
       
-      const bookings = await dbQuery('bookings').select('id').execute();
+      const bookings = await dbQuery('bookings').select('*').execute();
       console.log('AdminDashboard: Bookings:', bookings.data?.length);
       
       const activeProps = await dbQuery('properties').select('id').eq('is_available', true).execute();
       console.log('AdminDashboard: Active:', activeProps.data?.length);
+
+      // Toplam rezervasyon tutarı hesapla
+      const totalBookingAmount = (bookings.data || []).reduce((sum: number, booking: Booking) => {
+        return sum + (booking.total_amount || 0);
+      }, 0);
+
+      // Firma gelir durumu (company ledger account)
+      let companyRevenue = 0;
+      try {
+        const { data: companyAccount } = await dbQuery('ledger_accounts')
+          .select('*')
+          .eq('user_role', 'company')
+          .execute();
+        
+        if (companyAccount && companyAccount.length > 0) {
+          // user_id null olan firma hesabını bul
+          const firmAccount = companyAccount.find((acc: LedgerAccount) => acc.user_id === null);
+          if (firmAccount) {
+            companyRevenue = firmAccount.balance || 0;
+          }
+        }
+      } catch (error) {
+        console.error('Firma gelir durumu yüklenirken hata:', error);
+      }
 
       setStats({
         totalProperties: properties.data?.length || 0,
         totalBookings: bookings.data?.length || 0,
         totalReviews: 0, // reviews tablosu sorunlu olabilir
         activeProperties: activeProps.data?.length || 0,
+        totalBookingAmount,
+        companyRevenue,
       });
       console.log('AdminDashboard: İstatistikler yüklendi');
     } catch (error) {
       console.error('İstatistikler yüklenirken hata:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadUpcomingBookings = async () => {
+    try {
+      const today = new Date();
+      const tenDaysLater = new Date();
+      tenDaysLater.setDate(today.getDate() + 10);
+
+      const { data: bookings, error } = await dbQuery('bookings')
+        .select('*')
+        .gte('check_in_date', today.toISOString().split('T')[0])
+        .lte('check_in_date', tenDaysLater.toISOString().split('T')[0])
+        .in('status', ['pending', 'confirmed'])
+        .order('check_in_date', { ascending: true })
+        .limit(10)
+        .execute();
+
+      if (error) throw error;
+
+      // Her booking için property bilgisini al
+      const bookingsWithProperties = await Promise.all(
+        (bookings || []).map(async (booking: Booking) => {
+          const { data: property } = await dbQuery('properties')
+            .select('*')
+            .eq('id', booking.property_id)
+            .single()
+            .execute();
+          return {
+            ...booking,
+            properties: property
+          };
+        })
+      );
+
+      setUpcomingBookings(bookingsWithProperties);
+    } catch (error) {
+      console.error('Yaklaşan rezervasyonlar yüklenirken hata:', error);
+    }
+  };
+
+  const loadCheckoutBookings = async () => {
+    try {
+      const today = new Date();
+      const tenDaysLater = new Date();
+      tenDaysLater.setDate(today.getDate() + 10);
+
+      const { data: bookings, error } = await dbQuery('bookings')
+        .select('*')
+        .gte('check_out_date', today.toISOString().split('T')[0])
+        .lte('check_out_date', tenDaysLater.toISOString().split('T')[0])
+        .in('status', ['confirmed'])
+        .order('check_out_date', { ascending: true })
+        .limit(10)
+        .execute();
+
+      if (error) throw error;
+
+      // Her booking için property bilgisini al
+      const bookingsWithProperties = await Promise.all(
+        (bookings || []).map(async (booking: Booking) => {
+          const { data: property } = await dbQuery('properties')
+            .select('*')
+            .eq('id', booking.property_id)
+            .single()
+            .execute();
+          return {
+            ...booking,
+            properties: property
+          };
+        })
+      );
+
+      setCheckoutBookings(bookingsWithProperties);
+    } catch (error) {
+      console.error('Çıkış yapılacak rezervasyonlar yüklenirken hata:', error);
     }
   };
 
@@ -57,14 +171,25 @@ export default function AdminDashboard() {
       color: 'bg-[#D4AF37]',
       bgColor: 'bg-[#FDF8E7]',
       textColor: 'text-[#B8960D]',
+      isAmount: false,
     },
     {
-      title: 'Aktif Konaklama',
-      value: stats.activeProperties,
-      icon: 'ri-checkbox-circle-line',
-      color: 'bg-emerald-500',
-      bgColor: 'bg-emerald-50',
-      textColor: 'text-emerald-600',
+      title: 'Toplam Rezervasyon Tutarı',
+      value: `₺${stats.totalBookingAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      icon: 'ri-money-dollar-circle-line',
+      color: 'bg-blue-500',
+      bgColor: 'bg-blue-50',
+      textColor: 'text-blue-600',
+      isAmount: true,
+    },
+    {
+      title: 'Firma Gelir Durumu',
+      value: `₺${stats.companyRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      icon: 'ri-bank-line',
+      color: 'bg-green-500',
+      bgColor: 'bg-green-50',
+      textColor: 'text-green-600',
+      isAmount: true,
     },
     {
       title: 'Toplam Rezervasyon',
@@ -73,14 +198,7 @@ export default function AdminDashboard() {
       color: 'bg-orange-500',
       bgColor: 'bg-orange-50',
       textColor: 'text-orange-600',
-    },
-    {
-      title: 'Toplam Yorum',
-      value: stats.totalReviews,
-      icon: 'ri-star-line',
-      color: 'bg-amber-500',
-      bgColor: 'bg-amber-50',
-      textColor: 'text-amber-600',
+      isAmount: false,
     },
   ];
 
@@ -108,10 +226,114 @@ export default function AdminDashboard() {
                     <i className={`${stat.icon} text-2xl ${stat.textColor}`}></i>
                   </div>
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-1">{stat.value}</h3>
+                <h3 className={`${stat.isAmount ? 'text-xl' : 'text-2xl'} font-bold text-gray-900 mb-1`}>{stat.value}</h3>
                 <p className="text-sm text-gray-600">{stat.title}</p>
               </div>
             ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            {/* Yaklaşan Rezervasyonlar */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <i className="ri-calendar-event-line text-[#D4AF37]"></i>
+                Son 10 Gün İçinde Yaklaşan Rezervasyonlar
+              </h2>
+              {upcomingBookings.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <i className="ri-calendar-line text-4xl mb-2"></i>
+                  <p>Yaklaşan rezervasyon bulunmuyor</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {upcomingBookings.map((booking) => (
+                    <div
+                      key={booking.id}
+                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">
+                            {booking.first_name} {booking.last_name}
+                          </p>
+                          <p className="text-sm text-gray-600">{booking.properties?.title}</p>
+                        </div>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          booking.status === 'confirmed' 
+                            ? 'bg-green-100 text-green-700' 
+                            : 'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {booking.status === 'confirmed' ? 'Onaylandı' : 'Beklemede'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-600">
+                        <div className="flex items-center gap-1">
+                          <i className="ri-calendar-check-line"></i>
+                          <span>{new Date(booking.check_in_date).toLocaleDateString('tr-TR')}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <i className="ri-calendar-close-line"></i>
+                          <span>{new Date(booking.check_out_date).toLocaleDateString('tr-TR')}</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-gray-900">
+                        ₺{Number(booking.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Çıkış Yapılacak Rezervasyonlar */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <i className="ri-logout-box-line text-orange-500"></i>
+                Son 10 Gün İçinde Çıkış Yapılacak Rezervasyonlar
+              </h2>
+              {checkoutBookings.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <i className="ri-calendar-line text-4xl mb-2"></i>
+                  <p>Çıkış yapılacak rezervasyon bulunmuyor</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {checkoutBookings.map((booking) => (
+                    <div
+                      key={booking.id}
+                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">
+                            {booking.first_name} {booking.last_name}
+                          </p>
+                          <p className="text-sm text-gray-600">{booking.properties?.title}</p>
+                        </div>
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                          Çıkış
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-600">
+                        <div className="flex items-center gap-1">
+                          <i className="ri-calendar-check-line"></i>
+                          <span>{new Date(booking.check_in_date).toLocaleDateString('tr-TR')}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <i className="ri-calendar-close-line"></i>
+                          <span className="font-medium text-orange-600">
+                            {new Date(booking.check_out_date).toLocaleDateString('tr-TR')}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-gray-900">
+                        ₺{Number(booking.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

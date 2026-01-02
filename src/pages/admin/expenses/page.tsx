@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dbQuery, Expense, Property } from '../../../lib/supabase';
+import { dbQuery, Expense, Property, LedgerAccount, LedgerTransaction, AppUser } from '../../../lib/supabase';
 import AdminLayout from '../components/AdminLayout';
 
 interface ExpenseWithProperty extends Expense {
@@ -26,6 +26,24 @@ export default function AdminExpenses() {
   const [filterProperty, setFilterProperty] = useState<string>('all');
   const [filterPaid, setFilterPaid] = useState<'all' | 'paid' | 'unpaid'>('all');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  
+  // Cari hesaplar için state
+  const [ledgerAccounts, setLedgerAccounts] = useState<(LedgerAccount & { user?: AppUser; totalPaid?: number; totalCommission?: number })[]>([]);
+  const [ledgerTransactions, setLedgerTransactions] = useState<(LedgerTransaction & { account?: LedgerAccount & { user?: AppUser } })[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [showLedgerModal, setShowLedgerModal] = useState(false);
+  const [ledgerFilterRole, setLedgerFilterRole] = useState<'all' | 'supplier' | 'agent' | 'realtor' | 'company'>('all');
+  const [ledgerFilterSearch, setLedgerFilterSearch] = useState('');
+  
+  // Ödeme için state
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentAccount, setPaymentAccount] = useState<LedgerAccount & { user?: AppUser } | null>(null);
+  const [paymentData, setPaymentData] = useState({
+    amount: '',
+    description: '',
+    payment_date: new Date().toISOString().split('T')[0],
+  });
+  const [processingPayment, setProcessingPayment] = useState(false);
 
   const [formData, setFormData] = useState({
     property_id: '' as string | null,
@@ -42,7 +60,14 @@ export default function AdminExpenses() {
 
   useEffect(() => {
     loadData();
+    loadLedgerAccounts();
   }, []);
+
+  useEffect(() => {
+    if (selectedAccountId) {
+      loadLedgerTransactions(selectedAccountId);
+    }
+  }, [selectedAccountId]);
 
   const loadData = async () => {
     try {
@@ -118,6 +143,202 @@ export default function AdminExpenses() {
       setExpenses(expensesWithProperties);
     } catch (error) {
       console.error('Harcamalar yüklenirken hata:', error);
+    }
+  };
+
+  const loadLedgerAccounts = async () => {
+    try {
+      const { data: accounts, error } = await dbQuery('ledger_accounts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .execute();
+
+      if (error) throw error;
+
+      // Her cari hesap için kullanıcı bilgisini, toplam ödenen ve toplam komisyon tutarını al
+      const accountsWithUsers = await Promise.all(
+        (accounts || []).map(async (account: LedgerAccount) => {
+          // Toplam ödenen tutarı hesapla (payment tipindeki işlemlerin toplamı)
+          let totalPaid = 0;
+          try {
+            const { data: paymentTransactions } = await dbQuery('ledger_transactions')
+              .select('*')
+              .eq('account_id', account.id)
+              .eq('transaction_type', 'payment')
+              .execute();
+
+            if (paymentTransactions) {
+              totalPaid = paymentTransactions.reduce((sum: number, transaction: LedgerTransaction) => {
+                // Payment işlemleri negatif tutar olarak kaydedilir, mutlak değerini al
+                return sum + Math.abs(Number(transaction.amount) || 0);
+              }, 0);
+            }
+          } catch (error) {
+            console.error('Ödeme toplamı hesaplanırken hata:', error);
+          }
+
+          // Toplam komisyon tutarını hesapla (commission tipindeki işlemlerin toplamı)
+          let totalCommission = 0;
+          try {
+            const { data: commissionTransactions } = await dbQuery('ledger_transactions')
+              .select('*')
+              .eq('account_id', account.id)
+              .eq('transaction_type', 'commission')
+              .execute();
+
+            if (commissionTransactions) {
+              totalCommission = commissionTransactions.reduce((sum: number, transaction: LedgerTransaction) => {
+                // Commission işlemleri pozitif tutar olarak kaydedilir
+                return sum + (Number(transaction.amount) || 0);
+              }, 0);
+            }
+          } catch (error) {
+            console.error('Komisyon toplamı hesaplanırken hata:', error);
+          }
+
+          // Firma cari hesabı için user bilgisi yok
+          if (account.user_role === 'company' || !account.user_id) {
+            return {
+              ...account,
+              user: null,
+              totalPaid,
+              totalCommission
+            };
+          }
+
+          try {
+            const { data: userData } = await dbQuery('app_users')
+              .select('*')
+              .eq('id', account.user_id)
+              .single()
+              .execute();
+
+            return {
+              ...account,
+              user: userData,
+              totalPaid,
+              totalCommission
+            };
+          } catch (error) {
+            return {
+              ...account,
+              user: null,
+              totalPaid,
+              totalCommission
+            };
+          }
+        })
+      );
+
+      setLedgerAccounts(accountsWithUsers);
+    } catch (error) {
+      console.error('Cari hesaplar yüklenirken hata:', error);
+    }
+  };
+
+  const handlePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!paymentAccount?.id) return;
+
+    setProcessingPayment(true);
+    try {
+      const amount = parseFloat(paymentData.amount);
+      if (isNaN(amount) || amount <= 0) {
+        alert('Lütfen geçerli bir tutar giriniz.');
+        setProcessingPayment(false);
+        return;
+      }
+
+      // Ödeme işlemini ekle (negatif tutar - bakiye azalır)
+      const { error } = await dbQuery('ledger_transactions')
+        .insert({
+          account_id: paymentAccount.id,
+          transaction_type: 'payment',
+          amount: -amount, // Negatif tutar - ödeme yapıldığında bakiye azalır
+          description: paymentData.description || `Ödeme - ${paymentData.payment_date}`,
+        });
+
+      if (error) throw error;
+
+      alert('Ödeme başarıyla kaydedildi!');
+      setShowPaymentModal(false);
+      setPaymentAccount(null);
+      setPaymentData({
+        amount: '',
+        description: '',
+        payment_date: new Date().toISOString().split('T')[0],
+      });
+
+      // Cari hesapları ve işlemleri yenile
+      await loadLedgerAccounts();
+      if (selectedAccountId === paymentAccount.id) {
+        await loadLedgerTransactions(paymentAccount.id);
+      }
+    } catch (error: any) {
+      console.error('Ödeme kaydedilirken hata:', error);
+      alert('Ödeme kaydedilirken bir hata oluştu: ' + (error?.message || 'Bilinmeyen hata'));
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
+
+  const loadLedgerTransactions = async (accountId: string) => {
+    try {
+      const { data: transactions, error } = await dbQuery('ledger_transactions')
+        .select('*')
+        .eq('account_id', accountId)
+        .order('created_at', { ascending: false })
+        .execute();
+
+      if (error) throw error;
+
+      // Her işlem için cari hesap ve kullanıcı bilgisini al
+      const transactionsWithDetails = await Promise.all(
+        (transactions || []).map(async (transaction: LedgerTransaction) => {
+          try {
+            const { data: accountData } = await dbQuery('ledger_accounts')
+              .select('*')
+              .eq('id', transaction.account_id)
+              .single()
+              .execute();
+
+            if (accountData) {
+              // Firma cari hesabı için user bilgisi yok
+              let userData = null;
+              if (accountData.user_role !== 'company' && accountData.user_id) {
+                const { data: user } = await dbQuery('app_users')
+                  .select('*')
+                  .eq('id', accountData.user_id)
+                  .single()
+                  .execute();
+                userData = user;
+              }
+
+              return {
+                ...transaction,
+                account: {
+                  ...accountData,
+                  user: userData
+                }
+              };
+            }
+
+            return {
+              ...transaction,
+              account: null
+            };
+          } catch (error) {
+            return {
+              ...transaction,
+              account: null
+            };
+          }
+        })
+      );
+
+      setLedgerTransactions(transactionsWithDetails);
+    } catch (error) {
+      console.error('Cari işlemler yüklenirken hata:', error);
     }
   };
 
@@ -737,7 +958,437 @@ export default function AdminExpenses() {
             </div>
           </div>
         )}
+
+        {/* Cari Hesaplar Bölümü */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-gray-900">Cari Hesaplar</h2>
+            <button
+              onClick={() => {
+                loadLedgerAccounts();
+                setSelectedAccountId(null);
+                setLedgerTransactions([]);
+              }}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+            >
+              <i className="ri-refresh-line mr-2"></i>
+              Yenile
+            </button>
+          </div>
+
+          {/* Toplam Ödemeler Özeti */}
+          <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-red-50 rounded-lg p-4 border border-red-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-red-600 font-medium mb-1">Toplam Borç (Komisyonlar)</p>
+                  <p className="text-2xl font-bold text-red-700">
+                    ₺{ledgerAccounts.reduce((sum, account) => sum + (account.totalCommission || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                  <i className="ri-file-list-3-line text-2xl text-red-600"></i>
+                </div>
+              </div>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-4 border border-blue-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-blue-600 font-medium mb-1">Toplam Ödemeler</p>
+                  <p className="text-2xl font-bold text-blue-700">
+                    ₺{ledgerAccounts.reduce((sum, account) => sum + (account.totalPaid || 0), 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <i className="ri-money-dollar-circle-line text-2xl text-blue-600"></i>
+                </div>
+              </div>
+            </div>
+            <div className="bg-orange-50 rounded-lg p-4 border border-orange-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-orange-600 font-medium mb-1">Net Borç</p>
+                  <p className="text-2xl font-bold text-orange-700">
+                    ₺{(() => {
+                      const totalCommission = ledgerAccounts.reduce((sum, account) => sum + (account.totalCommission || 0), 0);
+                      const totalPaid = ledgerAccounts.reduce((sum, account) => sum + (account.totalPaid || 0), 0);
+                      const netDebt = totalCommission - totalPaid;
+                      return Math.abs(netDebt).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    })()}
+                  </p>
+                  <p className="text-xs text-orange-500 mt-1">
+                    (Komisyonlar - Ödemeler)
+                  </p>
+                </div>
+                <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                  <i className="ri-calculator-line text-2xl text-orange-600"></i>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Filtreler */}
+          <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Rol Filtresi</label>
+              <select
+                value={ledgerFilterRole}
+                onChange={(e) => setLedgerFilterRole(e.target.value as any)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+              >
+                <option value="all">Tümü</option>
+                <option value="supplier">Tedarikçi</option>
+                <option value="agent">Aracı</option>
+                <option value="realtor">Emlakçı</option>
+                <option value="company">Firma</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Ara</label>
+              <input
+                type="text"
+                value={ledgerFilterSearch}
+                onChange={(e) => setLedgerFilterSearch(e.target.value)}
+                placeholder="İsim, firma adı ile ara..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+              />
+            </div>
+          </div>
+
+          {/* Cari Hesaplar Tablosu */}
+          <div className="bg-gray-50 rounded-lg overflow-hidden mb-6">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Kullanıcı</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Rol</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Firma</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Bakiye</th>
+                    <th className="px-6 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Toplam Ödenen</th>
+                    <th className="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">İşlemler</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {(() => {
+                    const roleLabels: { [key: string]: string } = {
+                      supplier: 'Tedarikçi',
+                      agent: 'Aracı',
+                      realtor: 'Emlakçı',
+                      company: 'Firma'
+                    };
+                    const roleColors: { [key: string]: string } = {
+                      supplier: 'bg-blue-100 text-blue-700',
+                      agent: 'bg-purple-100 text-purple-700',
+                      realtor: 'bg-orange-100 text-orange-700',
+                      company: 'bg-green-100 text-green-700'
+                    };
+
+                    // Filtreleme
+                    let filteredAccounts = ledgerAccounts;
+                    if (ledgerFilterRole !== 'all') {
+                      filteredAccounts = filteredAccounts.filter(acc => acc.user_role === ledgerFilterRole);
+                    }
+                    if (ledgerFilterSearch) {
+                      const searchLower = ledgerFilterSearch.toLowerCase();
+                      filteredAccounts = filteredAccounts.filter(acc => {
+                        // Firma cari hesabı için özel kontrol
+                        if (acc.user_role === 'company') {
+                          return 'firma'.includes(searchLower) || 'aylin villas'.includes(searchLower);
+                        }
+                        const userName = acc.user ? `${acc.user.first_name} ${acc.user.last_name}`.toLowerCase() : '';
+                        const companyName = acc.user?.company_name?.toLowerCase() || '';
+                        return userName.includes(searchLower) || companyName.includes(searchLower);
+                      });
+                    }
+
+                    if (filteredAccounts.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
+                            Cari hesap bulunamadı
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return filteredAccounts.map((account) => (
+                      <tr 
+                        key={account.id} 
+                        className={`hover:bg-gray-50 transition-colors ${selectedAccountId === account.id ? 'bg-[#FDF8E7]' : ''}`}
+                      >
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">
+                                {account.user_role === 'company' 
+                                  ? 'Aylin Villas' 
+                                  : account.user 
+                                    ? `${account.user.first_name} ${account.user.last_name}` 
+                                    : 'Bilinmeyen'}
+                              </p>
+                              <p className="text-sm text-gray-500">
+                                {account.user_role === 'company' 
+                                  ? 'Firma Gelir Hesabı' 
+                                  : account.user?.email || ''}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${roleColors[account.user_role] || 'bg-gray-100 text-gray-700'}`}>
+                            {roleLabels[account.user_role] || account.user_role}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <p className="text-sm text-gray-900">
+                            {account.user_role === 'company' 
+                              ? 'Aylin Villas' 
+                              : account.user?.company_name || '-'}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          <p className={`text-sm font-semibold ${Number(account.balance) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            ₺{Number(account.balance).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right">
+                          <p className="text-sm font-semibold text-blue-600">
+                            ₺{(account.totalPaid || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2 justify-center">
+                            <button
+                              onClick={() => {
+                                setPaymentAccount(account);
+                                setPaymentData({
+                                  amount: '',
+                                  description: '',
+                                  payment_date: new Date().toISOString().split('T')[0],
+                                });
+                                setShowPaymentModal(true);
+                              }}
+                              className="px-3 py-1 rounded text-xs font-medium transition-colors bg-green-100 text-green-700 hover:bg-green-200"
+                              title="Ödeme Yap"
+                            >
+                              <i className="ri-money-dollar-circle-line mr-1"></i>
+                              Ödeme Yap
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (selectedAccountId === account.id) {
+                                  setSelectedAccountId(null);
+                                  setLedgerTransactions([]);
+                                } else {
+                                  setSelectedAccountId(account.id || null);
+                                }
+                              }}
+                              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                                selectedAccountId === account.id
+                                  ? 'bg-[#D4AF37] text-white'
+                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              {selectedAccountId === account.id ? 'İşlemleri Gizle' : 'İşlemleri Göster'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Seçili Cari Hesap İşlemleri */}
+          {selectedAccountId && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">İşlem Geçmişi</h3>
+              <div className="bg-gray-50 rounded-lg overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Tarih</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Açıklama</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Tip</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Komisyon Oranı</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Tutar</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {ledgerTransactions.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
+                            Henüz işlem bulunmuyor
+                          </td>
+                        </tr>
+                      ) : (
+                        ledgerTransactions.map((transaction) => (
+                          <tr key={transaction.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 text-sm text-gray-900">
+                              {transaction.created_at
+                                ? new Date(transaction.created_at).toLocaleDateString('tr-TR')
+                                : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-900">{transaction.description || '-'}</td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                transaction.transaction_type === 'commission'
+                                  ? 'bg-green-100 text-green-700'
+                                  : transaction.transaction_type === 'payment'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-gray-100 text-gray-700'
+                              }`}>
+                                {transaction.transaction_type === 'commission' ? 'Komisyon' :
+                                 transaction.transaction_type === 'payment' ? 'Ödeme' : 'Düzeltme'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-900">
+                              {transaction.commission_rate ? `%${transaction.commission_rate}` : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <span className={`text-sm font-semibold ${
+                                transaction.transaction_type === 'payment'
+                                  ? 'text-red-600'
+                                  : 'text-green-600'
+                              }`}>
+                                {transaction.transaction_type === 'payment' ? '-' : '+'}
+                                ₺{Math.abs(Number(transaction.amount)).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Ödeme Modal */}
+      {showPaymentModal && paymentAccount && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-900">Cari Hesap Ödemesi</h2>
+                <button
+                  onClick={() => {
+                    setShowPaymentModal(false);
+                    setPaymentAccount(null);
+                    setPaymentData({
+                      amount: '',
+                      description: '',
+                      payment_date: new Date().toISOString().split('T')[0],
+                    });
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <i className="ri-close-line text-2xl"></i>
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handlePayment} className="p-6 space-y-4">
+              <div className="bg-gray-50 p-4 rounded-lg mb-4">
+                <p className="text-sm text-gray-600 mb-1">Cari Hesap</p>
+                <p className="font-semibold text-gray-900">
+                  {paymentAccount.user_role === 'company' 
+                    ? 'Aylin Villas' 
+                    : paymentAccount.user 
+                      ? `${paymentAccount.user.first_name} ${paymentAccount.user.last_name}`
+                      : 'Bilinmeyen'}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">
+                  {paymentAccount.user_role === 'company' 
+                    ? 'Firma Gelir Hesabı' 
+                    : paymentAccount.user?.email || ''}
+                </p>
+                <div className="mt-2 pt-2 border-t border-gray-200">
+                  <p className="text-sm text-gray-600">Mevcut Bakiye</p>
+                  <p className={`text-lg font-bold ${Number(paymentAccount.balance) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    ₺{Number(paymentAccount.balance).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Ödeme Tutarı (₺) *
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="0.01"
+                  step="0.01"
+                  value={paymentData.amount}
+                  onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Ödeme Tarihi *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={paymentData.payment_date}
+                  onChange={(e) => setPaymentData({ ...paymentData, payment_date: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Açıklama
+                </label>
+                <textarea
+                  value={paymentData.description}
+                  onChange={(e) => setPaymentData({ ...paymentData, description: e.target.value })}
+                  rows={3}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                  placeholder="Ödeme açıklaması (opsiyonel)"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPaymentModal(false);
+                    setPaymentAccount(null);
+                    setPaymentData({
+                      amount: '',
+                      description: '',
+                      payment_date: new Date().toISOString().split('T')[0],
+                    });
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                  disabled={processingPayment}
+                >
+                  İptal
+                </button>
+                <button
+                  type="submit"
+                  disabled={processingPayment}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                >
+                  {processingPayment ? 'Kaydediliyor...' : 'Ödemeyi Kaydet'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }
