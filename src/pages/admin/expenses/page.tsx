@@ -273,6 +273,34 @@ export default function AdminExpenses() {
     }
   };
 
+  /** Cari hesap bakiyelerini ledger_transactions toplamına göre yeniden hesaplar (işlem silindiğinde bakiye sıfırlanmazsa kullanın) */
+  const recalculateLedgerBalances = async () => {
+    if (!confirm('Tüm cari hesap bakiyeleri, işlem kayıtlarına göre yeniden hesaplanacak. Devam edilsin mi?')) return;
+    try {
+      const { data: accounts, error: accError } = await dbQuery('ledger_accounts')
+        .select('id')
+        .execute();
+      if (accError || !accounts?.length) {
+        if (accError) throw accError;
+        return;
+      }
+      for (const account of accounts) {
+        const { data: txns } = await dbQuery('ledger_transactions')
+          .select('amount')
+          .eq('account_id', account.id)
+          .execute();
+        const sum = (txns || []).reduce((s: number, t: { amount?: number }) => s + (Number(t.amount) || 0), 0);
+        await dbQuery('ledger_accounts').eq('id', account.id).update({ balance: sum });
+      }
+      alert('Bakiyeler işlemlere göre güncellendi.');
+      await loadLedgerAccounts();
+      if (selectedAccountId) await loadLedgerTransactions(selectedAccountId);
+    } catch (e: any) {
+      console.error('Bakiye yeniden hesaplanırken hata:', e);
+      alert('Bakiyeler güncellenirken hata oluştu: ' + (e?.message || 'Bilinmeyen hata'));
+    }
+  };
+
   const loadLedgerAccounts = async () => {
     try {
       const { data: accounts, error } = await dbQuery('ledger_accounts')
@@ -376,7 +404,7 @@ export default function AdminExpenses() {
         return;
       }
 
-      // Ödeme işlemini ekle (negatif tutar - bakiye azalır)
+      // Ödeme işlemini ekle (negatif tutar - bakiye azalır). Bakiye güncellemesi veritabanı trigger'ı tarafından yapılır.
       const { error } = await dbQuery('ledger_transactions')
         .insert({
           account_id: paymentAccount.id,
@@ -386,23 +414,6 @@ export default function AdminExpenses() {
         });
 
       if (error) throw error;
-
-      // Cari hesap bakiyesini güncelle
-      const { data: account, error: accountError } = await dbQuery('ledger_accounts')
-        .select('balance')
-        .eq('id', paymentAccount.id)
-        .single()
-        .execute();
-
-      if (accountError) throw accountError;
-
-      const newBalance = (Number(account.balance) || 0) - amount;
-
-      const { error: updateError } = await dbQuery('ledger_accounts')
-        .eq('id', paymentAccount.id)
-        .update({ balance: newBalance });
-
-      if (updateError) throw updateError;
 
       alert('Ödeme başarıyla kaydedildi!');
       setShowPaymentModal(false);
@@ -1145,17 +1156,27 @@ export default function AdminExpenses() {
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold text-gray-900">Cari Hesaplar</h2>
-            <button
-              onClick={() => {
-                loadLedgerAccounts();
-                setSelectedAccountId(null);
-                setLedgerTransactions([]);
-              }}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-            >
-              <i className="ri-refresh-line mr-2"></i>
-              Yenile
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={recalculateLedgerBalances}
+                className="px-4 py-2 bg-amber-100 text-amber-800 rounded-lg hover:bg-amber-200 transition-colors"
+                title="İşlemler silindikten sonra bakiyeler yanlış kaldıysa bu butonla işlem toplamına göre güncelleyin"
+              >
+                <i className="ri-calculator-line mr-2"></i>
+                Bakiyeleri Yeniden Hesapla
+              </button>
+              <button
+                onClick={() => {
+                  loadLedgerAccounts();
+                  setSelectedAccountId(null);
+                  setLedgerTransactions([]);
+                }}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                <i className="ri-refresh-line mr-2"></i>
+                Yenile
+              </button>
+            </div>
           </div>
 
           {/* Toplam Ödemeler Özeti */}

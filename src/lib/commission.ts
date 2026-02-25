@@ -102,22 +102,7 @@ export async function addLedgerTransaction(
 
     if (error) throw error;
 
-    // Cari hesap bakiyesini güncelle
-    const { data: account, error: accountError } = await dbQuery('ledger_accounts')
-      .select('balance')
-      .eq('id', accountId)
-      .single()
-      .execute();
-
-    if (accountError) throw accountError;
-
-    const newBalance = (Number(account.balance) || 0) + amount;
-
-    const { error: updateError } = await dbQuery('ledger_accounts')
-      .eq('id', accountId)
-      .update({ balance: newBalance });
-
-    if (updateError) throw updateError;
+    // Bakiye güncellemesi veritabanı trigger'ı (update_ledger_account_balance) tarafından yapılır; burada tekrar güncelleme yapılmaz (çift yazım olmaması için)
   } catch (error) {
     console.error('Cari işlem eklenirken hata:', error);
     throw error;
@@ -129,19 +114,21 @@ export async function addLedgerTransaction(
  */
 export async function calculateAndAddCommissions(booking: Booking, property: Property): Promise<void> {
   try {
-    console.log('Komisyon hesaplama başladı:', { bookingId: booking.id, propertyId: property.id, totalAmount: booking.total_amount });
-    
-    // Depozito ve temizlik ücretini çıkartarak komisyon hesaplaması için base amount hesapla
-    const cleaningFee = property.cleaning_fee || 0;
+    console.log('Komisyon hesaplama başladı:', { bookingId: booking.id, propertyId: property.id, totalAmount: booking.total_amount, source: booking.source });
+
+    // Airbnb ve Booking.com: temizlik/depozito sisteme eklenmediği için tüm tutar komisyon tabanıdır; firma geliri yazılmaz
+    const isOta = booking.source === 'airbnb' || booking.source === 'booking.com';
+    const cleaningFee = isOta ? 0 : (property.cleaning_fee || 0);
     const deposit = property.deposit || 0;
     const totalAmount = booking.total_amount || 0;
-    const commissionBaseAmount = totalAmount - cleaningFee - deposit; // Komisyon hesaplaması için base tutar
-    
-    console.log('Komisyon hesaplama detayları:', { 
-      totalAmount, 
-      cleaningFee, 
-      deposit, 
-      commissionBaseAmount 
+    const commissionBaseAmount = isOta ? totalAmount : totalAmount - cleaningFee - deposit;
+
+    console.log('Komisyon hesaplama detayları:', {
+      totalAmount,
+      isOta,
+      cleaningFee: property.cleaning_fee || 0,
+      deposit,
+      commissionBaseAmount
     });
     
     let remainingAmount = commissionBaseAmount;
@@ -299,15 +286,13 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
       console.log('Rezervasyon emlakçıdan gelmedi:', { source: booking.source, realtorId: booking.realtor_id });
     }
 
-    // 4. Firma geliri (kalan tutar - tüm komisyonlar çıktıktan sonra)
+    // 4. Firma geliri: Komisyonlar düşüldükten sonra kalan tutar her zaman company carisine yazılır
     // remainingAmount: tedarikçi ve aracı komisyonları çıktıktan sonra kalan tutar
     // realtorCommissionAmount: emlakçı komisyonu (zaten hesaplanmış)
-    // Firma geliri = remainingAmount - emlakçı komisyonu (eğer varsa)
     const companyRevenue = remainingAmount - realtorCommissionAmount;
 
     console.log('Firma geliri hesaplanıyor:', { commissionBaseAmount, remainingAmount, companyRevenue });
 
-    // Firma cari hesabını oluştur veya getir
     const companyAccount = await getOrCreateLedgerAccount(null, 'company');
 
     // 4a. Rezervasyon gelirini (komisyonlar çıktıktan sonra kalan) firma hesabına ekle
@@ -315,31 +300,30 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
       await addLedgerTransaction(
         companyAccount.id!,
         booking.id,
-        'commission', // transaction_type olarak 'commission' kullanıyoruz, ama aslında firma geliri
+        'commission',
         companyRevenue,
         `Rezervasyon geliri - ${property.title}`,
-        undefined, // commission_rate yok
-        commissionBaseAmount // commission_base olarak komisyon base tutar
+        undefined,
+        commissionBaseAmount
       );
-
       console.log('Firma geliri eklendi:', { accountId: companyAccount.id, amount: companyRevenue });
-    } else {
-      console.log('Firma geliri 0 veya negatif, işlem eklenmedi:', { companyRevenue });
     }
 
-    // 4b. Temizlik ücretini firma gelir hesabına ekle
-    if (cleaningFee > 0) {
-      await addLedgerTransaction(
-        companyAccount.id!,
-        booking.id,
-        'commission',
-        cleaningFee,
-        `Temizlik ücreti - ${property.title}`,
-        undefined,
-        cleaningFee
-      );
-
-      console.log('Temizlik ücreti firma hesabına eklendi:', { accountId: companyAccount.id, amount: cleaningFee });
+    // 4b. Temizlik ücretini firma gelir hesabına ekle (sadece Airbnb/Booking.com dışındaki kaynaklar için; OTA'da temizlik sisteme eklenmediği için yazılmaz)
+    if (!isOta) {
+      const propCleaningFee = property.cleaning_fee || 0;
+      if (propCleaningFee > 0) {
+        await addLedgerTransaction(
+          companyAccount.id!,
+          booking.id,
+          'commission',
+          propCleaningFee,
+          `Temizlik ücreti - ${property.title}`,
+          undefined,
+          propCleaningFee
+        );
+        console.log('Temizlik ücreti firma hesabına eklendi:', { accountId: companyAccount.id, amount: propCleaningFee });
+      }
     }
 
     console.log('Komisyon hesaplama tamamlandı');

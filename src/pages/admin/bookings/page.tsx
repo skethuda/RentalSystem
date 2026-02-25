@@ -69,7 +69,7 @@ export default function AdminBookings() {
     if (formData.property_id && formData.check_in_date && formData.check_out_date) {
       calculatePrice();
     }
-  }, [formData.property_id, formData.check_in_date, formData.check_out_date, seasonalPrices]);
+  }, [formData.property_id, formData.check_in_date, formData.check_out_date, formData.source, seasonalPrices]);
 
   const loadProperties = async () => {
     try {
@@ -164,10 +164,11 @@ export default function AdminBookings() {
         currentDate.setDate(currentDate.getDate() + 1);
       }
 
-      // Temizlik ücreti ve depozito ekle
+      // Airbnb ve Booking.com için temizlik/depozito eklenmez; diğer kaynaklarda eklenir
+      const isOta = formData.source === 'airbnb' || formData.source === 'booking.com';
       const cleaningFee = propertyData.cleaning_fee || 0;
       const deposit = propertyData.deposit || 0;
-      const finalPrice = totalPrice + cleaningFee + deposit;
+      const finalPrice = isOta ? totalPrice : totalPrice + cleaningFee + deposit;
 
       setCalculatedPrice(finalPrice);
       setFormData({ ...formData, total_amount: finalPrice.toString() });
