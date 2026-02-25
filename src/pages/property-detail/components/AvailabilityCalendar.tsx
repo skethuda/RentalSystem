@@ -49,10 +49,28 @@ export default function AvailabilityCalendar({ onDateSelect, propertyId, minimum
       const activeBookings = (data || []).filter(
         (booking: BookedDate) => booking.status !== 'cancelled' && booking.status !== 'completed'
       );
+
+      // Satışa kapalı tarihleri de yükle (blocked_dates)
+      const { data: blockedData, error: blockedError } = await dbQuery('blocked_dates')
+        .select('start_date, end_date, reason')
+        .eq('property_id', propertyId)
+        .execute();
+
+      if (blockedError) {
+        console.error('blocked_dates sorgu hatası:', blockedError);
+      }
+
+      const blockedAsBookings: BookedDate[] = (blockedData || []).map((block: any) => ({
+        check_in_date: block.start_date,
+        check_out_date: block.end_date,
+        status: 'blocked',
+      }));
       
       console.log('Aktif rezervasyonlar:', activeBookings);
+      console.log('Satışa kapalı tarih aralıkları:', blockedAsBookings);
       
-      setBookedDates(activeBookings);
+      // Hem gerçek rezervasyonları hem de blokajları tek listede tut
+      setBookedDates([...activeBookings, ...blockedAsBookings]);
     } catch (error) {
       console.error('Rezervasyon tarihleri yüklenirken hata:', error);
     } finally {
@@ -254,6 +272,10 @@ export default function AvailabilityCalendar({ onDateSelect, propertyId, minimum
     if (booking) {
       const checkInStr = booking.check_in_date.split('T')[0];
       const checkOutStr = booking.check_out_date.split('T')[0];
+      // Eğer satışa kapalı kayıt ise farklı tooltip göster
+      if (booking.status === 'blocked') {
+        return `⛔ Satışa kapalı\n${formatTooltipDate(checkInStr)} - ${formatTooltipDate(checkOutStr)}`;
+      }
       const statusText = booking.status === 'confirmed' ? t('propertyDetail.confirmed') : t('propertyDetail.pending');
       return `🔒 ${t('propertyDetail.booked')}\n${formatTooltipDate(checkInStr)} - ${formatTooltipDate(checkOutStr)}\n${t('propertyDetail.confirmed')}: ${statusText}`;
     }
@@ -486,7 +508,7 @@ return (
               <div className="w-5 h-5 bg-red-100 rounded-md flex items-center justify-center">
                 <i className="ri-lock-fill text-red-500 text-xs"></i>
               </div>
-              <span className="text-gray-600">Dolu (Onaylı)</span>
+              <span className="text-gray-600">Dolu / Satışa Kapalı</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 bg-red-100 rounded-md flex items-center justify-center">

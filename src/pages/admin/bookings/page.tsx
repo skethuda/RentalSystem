@@ -305,7 +305,7 @@ export default function AdminBookings() {
 
       if (checkError) throw checkError;
 
-      // Manuel tarih çakışma kontrolü
+      // Manuel tarih çakışma kontrolü (mevcut rezervasyonlar)
       const conflictingBookings = (existingBookings || []).filter((booking: any) => {
         const bookingCheckIn = booking.check_in_date.split('T')[0];
         const bookingCheckOut = booking.check_out_date.split('T')[0];
@@ -314,6 +314,26 @@ export default function AdminBookings() {
 
       if (conflictingBookings.length > 0) {
         alert('Seçtiğiniz tarihler için bu konaklama yeri zaten rezerve edilmiş. Lütfen farklı tarihler seçin.');
+        setSaving(false);
+        return;
+      }
+
+      // Satışa kapalı (blocked_dates) tarihleri ile çakışma kontrolü
+      const { data: blockedDates, error: blockedError } = await dbQuery('blocked_dates')
+        .select('*')
+        .eq('property_id', formData.property_id)
+        .execute();
+
+      if (blockedError) throw blockedError;
+
+      const hasBlockedConflict = (blockedDates || []).some((block: any) => {
+        const blockStart = (block.start_date || '').split('T')[0];
+        const blockEnd = (block.end_date || '').split('T')[0];
+        return blockStart < checkOutStr && blockEnd > checkInStr;
+      });
+
+      if (hasBlockedConflict) {
+        alert('Seçtiğiniz tarihlerde satışa kapalı günler bulunmaktadır. Lütfen farklı bir tarih aralığı seçin.');
         setSaving(false);
         return;
       }

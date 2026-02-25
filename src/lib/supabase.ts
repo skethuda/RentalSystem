@@ -730,6 +730,16 @@ export interface LedgerTransaction {
   created_at?: string;
 }
 
+// Satışa kapalı tarih aralıkları
+export interface BlockedDate {
+  id?: string;
+  property_id: string;
+  start_date: string;
+  end_date: string;
+  reason?: string;
+  created_at?: string;
+}
+
 // Kullanıcı Rolleri
 export const USER_ROLES = [
   { value: 'admin', label: 'Admin', icon: 'ri-shield-user-line', color: 'red' },

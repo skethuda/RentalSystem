@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dbQuery, Property, Booking } from '../../../lib/supabase';
+import { dbQuery, Property, Booking, BlockedDate } from '../../../lib/supabase';
 import AdminLayout from '../components/AdminLayout';
 
 interface BookingWithDetails extends Booking {
@@ -33,6 +33,13 @@ export default function BookingCalendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [selectedBooking, setSelectedBooking] = useState<BookingWithDetails | null>(null);
+  const [blockedDates, setBlockedDates] = useState<BlockedDate[]>([]);
+  const [blockForm, setBlockForm] = useState({
+    start_date: '',
+    end_date: '',
+    reason: ''
+  });
+  const [savingBlock, setSavingBlock] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -43,10 +50,12 @@ export default function BookingCalendar() {
       loadAllBookings();
       setSelectedPropertyData(null);
       setSeasonalPrices([]);
+      setBlockedDates([]);
     } else {
       const loadData = async () => {
         await loadPropertyData(selectedProperty);
         await loadPropertyBookings(selectedProperty);
+        await loadBlockedDates(selectedProperty);
       };
       loadData();
     }
@@ -193,6 +202,26 @@ export default function BookingCalendar() {
     }
   };
 
+  const loadBlockedDates = async (propertyId: string) => {
+    try {
+      const result = await dbQuery('blocked_dates')
+        .select('*')
+        .eq('property_id', propertyId)
+        .order('start_date', { ascending: true })
+        .execute();
+
+      if (result.error) {
+        console.error('Satışa kapalı tarihler yüklenirken hata:', result.error);
+        setBlockedDates([]);
+      } else {
+        setBlockedDates(result.data || []);
+      }
+    } catch (error) {
+      console.error('Satışa kapalı tarihler yüklenirken hata:', error);
+      setBlockedDates([]);
+    }
+  };
+
   // Takvim günlerini oluştur
   const getCalendarDays = (): CalendarDay[] => {
     const year = currentDate.getFullYear();
@@ -214,13 +243,16 @@ export default function BookingCalendar() {
     for (let i = adjustedStartDay - 1; i >= 0; i--) {
       const date = new Date(year, month - 1, prevMonthLastDay - i);
       const priceInfo = getPriceForDate(date);
+      const blockedInfo = getBlockedInfoForDate(date);
       days.push({
         date,
         isCurrentMonth: false,
         isToday: false,
         bookings: getBookingsForDate(date),
         price: priceInfo.price,
-        seasonName: priceInfo.seasonName
+        seasonName: priceInfo.seasonName,
+        isBlocked: blockedInfo.isBlocked,
+        blockedReasons: blockedInfo.reasons
       });
     }
     
@@ -229,13 +261,16 @@ export default function BookingCalendar() {
       const date = new Date(year, month, day);
       const today = new Date();
       const priceInfo = getPriceForDate(date);
+      const blockedInfo = getBlockedInfoForDate(date);
       days.push({
         date,
         isCurrentMonth: true,
         isToday: date.toDateString() === today.toDateString(),
         bookings: getBookingsForDate(date),
         price: priceInfo.price,
-        seasonName: priceInfo.seasonName
+        seasonName: priceInfo.seasonName,
+        isBlocked: blockedInfo.isBlocked,
+        blockedReasons: blockedInfo.reasons
       });
     }
     
@@ -244,13 +279,16 @@ export default function BookingCalendar() {
     for (let day = 1; day <= remainingDays; day++) {
       const date = new Date(year, month + 1, day);
       const priceInfo = getPriceForDate(date);
+      const blockedInfo = getBlockedInfoForDate(date);
       days.push({
         date,
         isCurrentMonth: false,
         isToday: false,
         bookings: getBookingsForDate(date),
         price: priceInfo.price,
-        seasonName: priceInfo.seasonName
+        seasonName: priceInfo.seasonName,
+        isBlocked: blockedInfo.isBlocked,
+        blockedReasons: blockedInfo.reasons
       });
     }
     
@@ -263,6 +301,26 @@ export default function BookingCalendar() {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  };
+
+  const getBlockedInfoForDate = (date: Date): { isBlocked: boolean; reasons: string[] } => {
+    if (selectedProperty === 'all' || blockedDates.length === 0) {
+      return { isBlocked: false, reasons: [] };
+    }
+
+    const dateStr = formatDateToString(date);
+    const matchingBlocks = blockedDates.filter((block) => {
+      const startStr = (block.start_date || '').split('T')[0];
+      const endStr = (block.end_date || '').split('T')[0];
+      return dateStr >= startStr && dateStr < endStr;
+    });
+
+    return {
+      isBlocked: matchingBlocks.length > 0,
+      reasons: matchingBlocks
+        .map((b) => b.reason)
+        .filter((r): r is string => !!r && r.trim().length > 0)
+    };
   };
 
   // Belirli bir tarih için fiyat hesapla
@@ -362,7 +420,7 @@ export default function BookingCalendar() {
         </div>
 
         {/* Filtreler */}
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Villa Seç</label>
@@ -386,6 +444,126 @@ export default function BookingCalendar() {
               </button>
             </div>
           </div>
+
+          {selectedProperty !== 'all' && (
+            <div className="pt-4 border-t border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                <i className="ri-calendar-close-line text-[#D4AF37]"></i>
+                Tarihleri Satışa Kapat
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Başlangıç Tarihi</label>
+                  <input
+                    type="date"
+                    value={blockForm.start_date}
+                    onChange={(e) => setBlockForm({ ...blockForm, start_date: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Bitiş Tarihi</label>
+                  <input
+                    type="date"
+                    value={blockForm.end_date}
+                    onChange={(e) => setBlockForm({ ...blockForm, end_date: e.target.value })}
+                    min={blockForm.start_date}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                  />
+                </div>
+                <div className="md:col-span-2 flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Açıklama (opsiyonel)</label>
+                    <input
+                      type="text"
+                      value={blockForm.reason}
+                      onChange={(e) => setBlockForm({ ...blockForm, reason: e.target.value })}
+                      placeholder="Örn: Sahip kullanımı, bakım, vb."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingBlock || !blockForm.start_date || !blockForm.end_date}
+                    onClick={async () => {
+                      if (!selectedProperty || selectedProperty === 'all') return;
+                      if (!blockForm.start_date || !blockForm.end_date) return;
+                      if (blockForm.start_date >= blockForm.end_date) {
+                        alert('Bitiş tarihi, başlangıç tarihinden büyük olmalıdır.');
+                        return;
+                      }
+                      try {
+                        setSavingBlock(true);
+                        const { error } = await dbQuery('blocked_dates').insert({
+                          property_id: selectedProperty,
+                          start_date: blockForm.start_date,
+                          end_date: blockForm.end_date,
+                          reason: blockForm.reason || null
+                        });
+                        if (error) throw error;
+                        setBlockForm({ start_date: '', end_date: '', reason: '' });
+                        await loadBlockedDates(selectedProperty);
+                        alert('Tarih aralığı satışa kapatıldı.');
+                      } catch (err: any) {
+                        console.error('Satışa kapatma kaydedilirken hata:', err);
+                        alert('Satışa kapatma kaydedilirken bir hata oluştu.');
+                      } finally {
+                        setSavingBlock(false);
+                      }
+                    }}
+                    className="px-4 py-2 bg-[#D4AF37] text-white rounded-lg text-sm font-medium hover:bg-[#B8960D] transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    {savingBlock ? 'Kaydediliyor...' : 'Satışa Kapat'}
+                  </button>
+                </div>
+              </div>
+
+              {blockedDates.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-xs font-semibold text-gray-700 mb-2">
+                    Bu villa için satışa kapalı dönemler ({blockedDates.length}):
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {blockedDates.map((block) => (
+                      <div
+                        key={block.id}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-full text-[11px] text-red-700"
+                      >
+                        <span className="font-semibold">
+                          {new Date(block.start_date).toLocaleDateString('tr-TR')} -{' '}
+                          {new Date(block.end_date).toLocaleDateString('tr-TR')}
+                        </span>
+                        {block.reason && (
+                          <span className="text-[10px] text-red-600 truncate max-w-[140px]" title={block.reason}>
+                            ({block.reason})
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!block.id) return;
+                            if (!confirm('Bu satışa kapalı tarih aralığını kaldırmak istediğinize emin misiniz?')) return;
+                            try {
+                              const { error } = await dbQuery('blocked_dates').eq('id', block.id).delete();
+                              if (error) throw error;
+                              await loadBlockedDates(selectedProperty);
+                            } catch (err: any) {
+                              console.error('Satışa kapalı tarih silinirken hata:', err);
+                              alert('Kayıt silinirken bir hata oluştu.');
+                            }
+                          }}
+                          className="ml-1 text-red-500 hover:text-red-700"
+                          title="Kaldır"
+                        >
+                          <i className="ri-close-line text-xs"></i>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Takvim */}
@@ -426,6 +604,7 @@ export default function BookingCalendar() {
                 const hasBookings = day.bookings.length > 0;
                 const isPast = day.date < new Date() && !day.isToday;
                 const showPrice = selectedProperty !== 'all' && day.price && day.price > 0;
+                const isBlocked = !!day.isBlocked;
                 
                 return (
                   <div
@@ -435,6 +614,7 @@ export default function BookingCalendar() {
                       ${day.isCurrentMonth ? 'border-gray-200' : 'border-gray-100 bg-gray-50'}
                       ${day.isToday ? 'border-[#D4AF37] bg-[#FDF8E7]' : ''}
                       ${hasBookings ? 'hover:border-[#D4AF37] hover:shadow-md' : ''}
+                      ${isBlocked ? 'border-red-300 bg-red-50' : ''}
                       ${isPast ? 'opacity-60' : ''}
                     `}
                     onClick={() => {
@@ -477,6 +657,14 @@ export default function BookingCalendar() {
                           {booking.property?.title || 'Villa'}
                         </div>
                       ))}
+                      {!hasBookings && isBlocked && (
+                        <div
+                          className="text-[10px] px-2 py-1 rounded bg-red-100 text-red-700 font-semibold"
+                          title={day.blockedReasons && day.blockedReasons.length > 0 ? day.blockedReasons.join(', ') : 'Satışa kapalı'}
+                        >
+                          Satışa Kapalı
+                        </div>
+                      )}
                       {day.bookings.length > 2 && (
                         <div className="text-xs text-gray-500 px-2">
                           +{day.bookings.length - 2} daha

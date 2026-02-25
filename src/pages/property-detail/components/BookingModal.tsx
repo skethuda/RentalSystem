@@ -74,7 +74,7 @@ export default function BookingModal({
 
       if (checkError) throw checkError;
 
-      // Manuel tarih çakışma kontrolü
+      // Rezervasyonlarla manuel tarih çakışma kontrolü
       const conflictingBookings = (existingBookings || []).filter((booking: any) => {
         const bookingCheckIn = booking.check_in_date.split('T')[0];
         const bookingCheckOut = booking.check_out_date.split('T')[0];
@@ -83,6 +83,26 @@ export default function BookingModal({
 
       if (conflictingBookings.length > 0) {
         alert(t('booking.conflictError'));
+        setLoading(false);
+        return;
+      }
+
+      // Satışa kapalı (blocked_dates) tarihleri ile çakışma kontrolü
+      const { data: blockedDates, error: blockedError } = await dbQuery('blocked_dates')
+        .select('*')
+        .eq('property_id', property.id)
+        .execute();
+
+      if (blockedError) throw blockedError;
+
+      const hasBlockedConflict = (blockedDates || []).some((block: any) => {
+        const blockStart = (block.start_date || '').split('T')[0];
+        const blockEnd = (block.end_date || '').split('T')[0];
+        return blockStart < checkOutStr && blockEnd > checkInStr;
+      });
+
+      if (hasBlockedConflict) {
+        alert('Seçtiğiniz tarihlerde satışa kapalı günler bulunmaktadır. Lütfen farklı bir tarih aralığı seçin.');
         setLoading(false);
         return;
       }
