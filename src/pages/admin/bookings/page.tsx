@@ -29,6 +29,7 @@ export default function AdminBookings() {
   const [realtors, setRealtors] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [showModal, setShowModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState<BookingWithProperty | null>(null);
@@ -259,9 +260,32 @@ export default function AdminBookings() {
   };
 
   const filteredBookings = bookings.filter(b => {
-    if (filter === 'all') return true;
-    return b.status === filter;
+    if (filter !== 'all' && b.status !== filter) return false;
+    if (sourceFilter === 'all') return true;
+    return (b.source || '') === sourceFilter;
   });
+
+  const getSourceText = (source?: string) => {
+    switch (source) {
+      case 'aylin_villas': return 'Aylin Villas';
+      case 'web': return 'Web';
+      case 'realtor': return 'Emlakçı';
+      case 'booking.com': return 'Booking.com';
+      case 'airbnb': return 'Airbnb';
+      default: return source || '—';
+    }
+  };
+
+  const getSourceColor = (source?: string) => {
+    switch (source) {
+      case 'aylin_villas': return 'bg-amber-100 text-amber-800';
+      case 'web': return 'bg-sky-100 text-sky-800';
+      case 'realtor': return 'bg-violet-100 text-violet-800';
+      case 'booking.com': return 'bg-blue-100 text-blue-800';
+      case 'airbnb': return 'bg-rose-100 text-rose-800';
+      default: return 'bg-gray-100 text-gray-700';
+    }
+  };
 
   const getStatusColor = (status?: string) => {
     switch (status) {
@@ -440,7 +464,8 @@ export default function AdminBookings() {
         </button>
       </div>
 
-      <div className="mb-6 flex items-center gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-gray-600 mr-1">Durum:</span>
         <button
           onClick={() => setFilter('all')}
           className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
@@ -473,6 +498,70 @@ export default function AdminBookings() {
         </button>
       </div>
 
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-gray-600 mr-1">Kaynak:</span>
+        <button
+          onClick={() => setSourceFilter('all')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'all'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Tümü
+        </button>
+        <button
+          onClick={() => setSourceFilter('aylin_villas')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'aylin_villas'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Aylin Villas ({bookings.filter(b => b.source === 'aylin_villas').length})
+        </button>
+        <button
+          onClick={() => setSourceFilter('web')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'web'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Web ({bookings.filter(b => b.source === 'web').length})
+        </button>
+        <button
+          onClick={() => setSourceFilter('realtor')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'realtor'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Emlakçı ({bookings.filter(b => b.source === 'realtor').length})
+        </button>
+        <button
+          onClick={() => setSourceFilter('booking.com')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'booking.com'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Booking.com ({bookings.filter(b => b.source === 'booking.com').length})
+        </button>
+        <button
+          onClick={() => setSourceFilter('airbnb')}
+          className={`px-4 py-2 rounded-lg font-medium text-sm transition-all whitespace-nowrap ${
+            sourceFilter === 'airbnb'
+              ? 'bg-[#D4AF37] text-white'
+              : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+          }`}
+        >
+          Airbnb ({bookings.filter(b => b.source === 'airbnb').length})
+        </button>
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <i className="ri-loader-4-line text-4xl text-[#D4AF37] animate-spin"></i>
@@ -497,6 +586,9 @@ export default function AdminBookings() {
                   </th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                     Toplam
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                    Kaynak
                   </th>
                   <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
                     Durum
@@ -542,6 +634,11 @@ export default function AdminBookings() {
                     </td>
                     <td className="px-6 py-4">
                       <p className="font-semibold text-gray-900">₺{booking.total_amount}</p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getSourceColor(booking.source)}`}>
+                        {getSourceText(booking.source)}
+                      </span>
                     </td>
                     <td className="px-6 py-4">
                       <select
