@@ -101,6 +101,23 @@ export async function addLedgerTransaction(
       });
 
     if (error) throw error;
+
+    // Cari hesap bakiyesini güncelle
+    const { data: account, error: accountError } = await dbQuery('ledger_accounts')
+      .select('balance')
+      .eq('id', accountId)
+      .single()
+      .execute();
+
+    if (accountError) throw accountError;
+
+    const newBalance = (Number(account.balance) || 0) + amount;
+
+    const { error: updateError } = await dbQuery('ledger_accounts')
+      .eq('id', accountId)
+      .update({ balance: newBalance });
+
+    if (updateError) throw updateError;
   } catch (error) {
     console.error('Cari işlem eklenirken hata:', error);
     throw error;
@@ -114,9 +131,21 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
   try {
     console.log('Komisyon hesaplama başladı:', { bookingId: booking.id, propertyId: property.id, totalAmount: booking.total_amount });
     
+    // Depozito ve temizlik ücretini çıkartarak komisyon hesaplaması için base amount hesapla
+    const cleaningFee = property.cleaning_fee || 0;
+    const deposit = property.deposit || 0;
     const totalAmount = booking.total_amount || 0;
-    let remainingAmount = totalAmount;
-    let remainingAfterSupplier = totalAmount; // Emlakçı komisyonu için (sadece tedarikçi komisyonu çıktıktan sonra)
+    const commissionBaseAmount = totalAmount - cleaningFee - deposit; // Komisyon hesaplaması için base tutar
+    
+    console.log('Komisyon hesaplama detayları:', { 
+      totalAmount, 
+      cleaningFee, 
+      deposit, 
+      commissionBaseAmount 
+    });
+    
+    let remainingAmount = commissionBaseAmount;
+    let remainingAfterSupplier = commissionBaseAmount; // Emlakçı komisyonu için (sadece tedarikçi komisyonu çıktıktan sonra)
     let hasSupplier = false;
     let realtorCommissionAmount = 0; // Emlakçı komisyonu tutarı (firma geliri hesaplamak için)
 
@@ -132,9 +161,9 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
         // Eğer kullanıcı tedarikçi ise
         if (supplierUser.role === 'supplier' && supplierUser.commission_rate) {
           const commissionRate = supplierUser.commission_rate;
-          const commissionAmount = (totalAmount * commissionRate) / 100;
+          const commissionAmount = (commissionBaseAmount * commissionRate) / 100;
 
-          console.log('Tedarikçi komisyonu hesaplanıyor:', { supplierId: property.supplier_id, rate: commissionRate, amount: commissionAmount });
+          console.log('Tedarikçi komisyonu hesaplanıyor:', { supplierId: property.supplier_id, rate: commissionRate, amount: commissionAmount, baseAmount: commissionBaseAmount });
 
           // Tedarikçi cari hesabını oluştur veya getir
           const supplierAccount = await getOrCreateLedgerAccount(property.supplier_id, 'supplier');
@@ -147,11 +176,11 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
             commissionAmount,
             `Rezervasyon komisyonu - ${property.title}`,
             commissionRate,
-            totalAmount
+            commissionBaseAmount
           );
 
-          remainingAmount = totalAmount - commissionAmount;
-          remainingAfterSupplier = totalAmount - commissionAmount; // Emlakçı için kalan tutar
+          remainingAmount = commissionBaseAmount - commissionAmount;
+          remainingAfterSupplier = commissionBaseAmount - commissionAmount; // Emlakçı için kalan tutar
           hasSupplier = true;
           console.log('Tedarikçi komisyonu eklendi:', { accountId: supplierAccount.id, amount: commissionAmount, remainingAfterSupplier });
         }
@@ -160,7 +189,7 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
 
     // 2. Aracı komisyonu (sistemdeki aktif aracı)
     // Her rezervasyonda aracı komisyonu hesaplanır
-    // Eğer property tedarikçiye aitse kalan tutar üzerinden, değilse toplam tutar üzerinden
+    // Eğer property tedarikçiye aitse kalan tutar üzerinden, değilse komisyon base tutar üzerinden
     const { data: agents, error: agentsError } = await dbQuery('app_users')
       .select('*')
       .eq('role', 'agent')
@@ -180,8 +209,8 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
       
       if (agent.commission_rate && agent.commission_rate > 0) {
         const commissionRate = agent.commission_rate;
-        // Property tedarikçiye aitse kalan tutar, değilse toplam tutar üzerinden
-        const baseAmount = hasSupplier ? remainingAmount : totalAmount;
+        // Property tedarikçiye aitse kalan tutar, değilse komisyon base tutar üzerinden
+        const baseAmount = hasSupplier ? remainingAmount : commissionBaseAmount;
         const commissionAmount = (baseAmount * commissionRate) / 100;
 
         console.log('Aracı komisyonu hesaplanıyor:', { agentId: agent.id, rate: commissionRate, baseAmount, amount: commissionAmount });
@@ -276,13 +305,13 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
     // Firma geliri = remainingAmount - emlakçı komisyonu (eğer varsa)
     const companyRevenue = remainingAmount - realtorCommissionAmount;
 
-    console.log('Firma geliri hesaplanıyor:', { totalAmount, remainingAmount, companyRevenue });
+    console.log('Firma geliri hesaplanıyor:', { commissionBaseAmount, remainingAmount, companyRevenue });
 
+    // Firma cari hesabını oluştur veya getir
+    const companyAccount = await getOrCreateLedgerAccount(null, 'company');
+
+    // 4a. Rezervasyon gelirini (komisyonlar çıktıktan sonra kalan) firma hesabına ekle
     if (companyRevenue > 0) {
-      // Firma cari hesabını oluştur veya getir
-      const companyAccount = await getOrCreateLedgerAccount(null, 'company');
-
-      // Firma gelirini cari hesaba ekle
       await addLedgerTransaction(
         companyAccount.id!,
         booking.id,
@@ -290,12 +319,27 @@ export async function calculateAndAddCommissions(booking: Booking, property: Pro
         companyRevenue,
         `Rezervasyon geliri - ${property.title}`,
         undefined, // commission_rate yok
-        totalAmount // commission_base olarak toplam tutar
+        commissionBaseAmount // commission_base olarak komisyon base tutar
       );
 
       console.log('Firma geliri eklendi:', { accountId: companyAccount.id, amount: companyRevenue });
     } else {
       console.log('Firma geliri 0 veya negatif, işlem eklenmedi:', { companyRevenue });
+    }
+
+    // 4b. Temizlik ücretini firma gelir hesabına ekle
+    if (cleaningFee > 0) {
+      await addLedgerTransaction(
+        companyAccount.id!,
+        booking.id,
+        'commission',
+        cleaningFee,
+        `Temizlik ücreti - ${property.title}`,
+        undefined,
+        cleaningFee
+      );
+
+      console.log('Temizlik ücreti firma hesabına eklendi:', { accountId: companyAccount.id, amount: cleaningFee });
     }
 
     console.log('Komisyon hesaplama tamamlandı');

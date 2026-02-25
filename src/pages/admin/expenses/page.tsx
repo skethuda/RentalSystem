@@ -1,6 +1,137 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { dbQuery, Expense, Property, LedgerAccount, LedgerTransaction, AppUser } from '../../../lib/supabase';
 import AdminLayout from '../components/AdminLayout';
+
+// Property Autocomplete Component
+interface PropertyAutocompleteProps {
+  properties: Property[];
+  value: { id: string | null; searchTerm: string };
+  onChange: (value: { id: string | null; searchTerm: string }) => void;
+  onRemove: () => void;
+  canRemove: boolean;
+}
+
+function PropertyAutocomplete({ properties, value, onChange, onRemove, canRemove }: PropertyAutocompleteProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState(value.searchTerm || '');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSearchTerm(value.searchTerm || '');
+  }, [value]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        inputRef.current &&
+        !inputRef.current.contains(event.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredProperties = properties.filter(prop =>
+    prop.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    prop.location?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const handleSelect = (property: Property) => {
+    onChange({ id: property.id!, searchTerm: property.title });
+    setIsOpen(false);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const term = e.target.value;
+    setSearchTerm(term);
+    setIsOpen(true);
+    onChange({ id: null, searchTerm: term });
+  };
+
+  const handleInputFocus = () => {
+    setIsOpen(true);
+  };
+
+  const selectedProperty = value.id ? properties.find(p => p.id === value.id) : null;
+
+  return (
+    <div className="relative">
+      <div className="flex gap-2">
+        <div className="flex-1 relative">
+          <input
+            ref={inputRef}
+            type="text"
+            value={searchTerm}
+            onChange={handleInputChange}
+            onFocus={handleInputFocus}
+            placeholder="Ürün ara veya seç..."
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+          />
+          {isOpen && (
+            <div
+              ref={dropdownRef}
+              className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-y-auto"
+            >
+              {/* Diğer (Firma Harcaması) seçeneği */}
+              <div
+                onClick={() => {
+                  onChange({ id: null, searchTerm: 'Diğer (Firma Harcaması)' });
+                  setIsOpen(false);
+                }}
+                className="px-4 py-2 hover:bg-gray-100 cursor-pointer transition-colors border-b border-gray-200"
+              >
+                <div className="font-medium text-gray-700">Diğer (Firma Harcaması)</div>
+                <div className="text-sm text-gray-500">Belirli bir ürüne ait olmayan harcama</div>
+              </div>
+              {filteredProperties.length > 0 && (
+                <>
+                  {filteredProperties.map(property => (
+                    <div
+                      key={property.id}
+                      onClick={() => handleSelect(property)}
+                      className="px-4 py-2 hover:bg-[#D4AF37] hover:text-white cursor-pointer transition-colors"
+                    >
+                      <div className="font-medium">{property.title}</div>
+                      {property.location && (
+                        <div className="text-sm text-gray-500">{property.location}</div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            title="Kaldır"
+          >
+            <i className="ri-close-line text-xl"></i>
+          </button>
+        )}
+      </div>
+      {value.id === null && value.searchTerm === 'Diğer (Firma Harcaması)' && (
+        <div className="mt-1 text-xs text-gray-500">
+          Seçili: Diğer (Firma Harcaması)
+        </div>
+      )}
+      {selectedProperty && (
+        <div className="mt-1 text-xs text-gray-500">
+          Seçili: {selectedProperty.title}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface ExpenseWithProperty extends Expense {
   property?: Property;
@@ -45,8 +176,12 @@ export default function AdminExpenses() {
   });
   const [processingPayment, setProcessingPayment] = useState(false);
 
+  // Property seçimleri için state - her satır için bir property seçimi
+  const [selectedProperties, setSelectedProperties] = useState<Array<{ id: string | null; searchTerm: string }>>([
+    { id: null, searchTerm: '' }
+  ]);
+
   const [formData, setFormData] = useState({
-    property_id: '' as string | null,
     expense_type: 'electricity' as ExpenseType,
     description: '',
     amount: '',
@@ -111,14 +246,6 @@ export default function AdminExpenses() {
       // Her expense için property bilgisini al
       const expensesWithProperties = await Promise.all(
         expensesData.map(async (expense: Expense) => {
-          // property_id null ise "Diğer" harcaması
-          if (!expense.property_id) {
-            return {
-              ...expense,
-              property: null
-            };
-          }
-          
           try {
             const propertyResult = await dbQuery('properties')
               .select('*')
@@ -260,6 +387,23 @@ export default function AdminExpenses() {
 
       if (error) throw error;
 
+      // Cari hesap bakiyesini güncelle
+      const { data: account, error: accountError } = await dbQuery('ledger_accounts')
+        .select('balance')
+        .eq('id', paymentAccount.id)
+        .single()
+        .execute();
+
+      if (accountError) throw accountError;
+
+      const newBalance = (Number(account.balance) || 0) - amount;
+
+      const { error: updateError } = await dbQuery('ledger_accounts')
+        .eq('id', paymentAccount.id)
+        .update({ balance: newBalance });
+
+      if (updateError) throw updateError;
+
       alert('Ödeme başarıyla kaydedildi!');
       setShowPaymentModal(false);
       setPaymentAccount(null);
@@ -345,34 +489,74 @@ export default function AdminExpenses() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const expenseData = {
-        ...formData,
-        property_id: formData.property_id || null,
-        amount: parseFloat(formData.amount),
-        expense_date: formData.expense_date,
-        due_date: formData.due_date || null,
-        paid_date: formData.is_paid && formData.paid_date ? formData.paid_date : null,
-        invoice_number: formData.invoice_number || null,
-        notes: formData.notes || null,
-      };
+      // Boş olmayan property seçimlerini filtrele
+      const validProperties = selectedProperties.filter(p => p.id !== null && p.id !== '');
 
-      let result;
-      if (editingExpense?.id) {
-        // Güncelle
-        result = await dbQuery('expenses')
+      // Eğer hiç geçerli property yoksa ve editing mode değilse, "Diğer" olarak kaydet
+      if (validProperties.length === 0 && !editingExpense) {
+        const expenseData = {
+          ...formData,
+          property_id: null,
+          amount: parseFloat(formData.amount),
+          expense_date: formData.expense_date,
+          due_date: formData.due_date || null,
+          paid_date: formData.is_paid && formData.paid_date ? formData.paid_date : null,
+          invoice_number: formData.invoice_number || null,
+          notes: formData.notes || null,
+        };
+
+        const result = await dbQuery('expenses').insert(expenseData);
+        if (result.error && !result.data) {
+          console.error('Harcama kaydedilirken hata:', result.error);
+          alert('Harcama kaydedilirken bir hata oluştu: ' + (result.error.message || 'Bilinmeyen hata'));
+          return;
+        }
+      } else if (editingExpense?.id) {
+        // Güncelleme modunda tek bir expense güncelle
+        const expenseData = {
+          ...formData,
+          property_id: validProperties.length > 0 ? validProperties[0].id : null,
+          amount: parseFloat(formData.amount),
+          expense_date: formData.expense_date,
+          due_date: formData.due_date || null,
+          paid_date: formData.is_paid && formData.paid_date ? formData.paid_date : null,
+          invoice_number: formData.invoice_number || null,
+          notes: formData.notes || null,
+        };
+
+        const result = await dbQuery('expenses')
           .eq('id', editingExpense.id)
           .update(expenseData);
-      } else {
-        // Yeni ekle
-        result = await dbQuery('expenses')
-          .insert(expenseData);
-      }
 
-      // Sadece gerçek hata varsa hata mesajı göster
-      if (result.error && !result.data) {
-        console.error('Harcama kaydedilirken hata:', result.error);
-        alert('Harcama kaydedilirken bir hata oluştu: ' + (result.error.message || 'Bilinmeyen hata'));
-        return;
+        if (result.error && !result.data) {
+          console.error('Harcama kaydedilirken hata:', result.error);
+          alert('Harcama kaydedilirken bir hata oluştu: ' + (result.error.message || 'Bilinmeyen hata'));
+          return;
+        }
+      } else {
+        // Yeni ekleme - her property için ayrı expense oluştur
+        const expensePromises = validProperties.map(property => {
+          const expenseData = {
+            ...formData,
+            property_id: property.id,
+            amount: parseFloat(formData.amount),
+            expense_date: formData.expense_date,
+            due_date: formData.due_date || null,
+            paid_date: formData.is_paid && formData.paid_date ? formData.paid_date : null,
+            invoice_number: formData.invoice_number || null,
+            notes: formData.notes || null,
+          };
+
+          return dbQuery('expenses').insert(expenseData);
+        });
+
+        const results = await Promise.all(expensePromises);
+        const errors = results.filter(r => r.error && !r.data);
+        
+        if (errors.length > 0) {
+          console.error('Harcama kaydedilirken hata:', errors);
+          alert('Bazı harcamalar kaydedilirken hata oluştu');
+        }
       }
 
       await loadExpenses();
@@ -385,8 +569,8 @@ export default function AdminExpenses() {
 
   const handleEdit = (expense: ExpenseWithProperty) => {
     setEditingExpense(expense);
+    setSelectedProperties(expense.property_id ? [{ id: expense.property_id, searchTerm: expense.property?.title || '' }] : [{ id: null, searchTerm: '' }]);
     setFormData({
-      property_id: expense.property_id || '',
       expense_type: expense.expense_type,
       description: expense.description,
       amount: expense.amount.toString(),
@@ -425,8 +609,8 @@ export default function AdminExpenses() {
   const handleCloseModal = () => {
     setShowModal(false);
     setEditingExpense(null);
+    setSelectedProperties([{ id: null, searchTerm: '' }]);
     setFormData({
-      property_id: null,
       expense_type: 'electricity',
       description: '',
       amount: '',
@@ -465,10 +649,7 @@ export default function AdminExpenses() {
   // Filtreleme
   const filteredExpenses = expenses.filter(expense => {
     if (filterType !== 'all' && expense.expense_type !== filterType) return false;
-    if (filterProperty !== 'all') {
-      if (filterProperty === 'other' && expense.property_id !== null) return false;
-      if (filterProperty !== 'other' && expense.property_id !== filterProperty) return false;
-    }
+    if (filterProperty !== 'all' && expense.property_id !== filterProperty) return false;
     if (filterPaid === 'paid' && !expense.is_paid) return false;
     if (filterPaid === 'unpaid' && expense.is_paid) return false;
     if (dateRange.start && expense.expense_date < dateRange.start) return false;
@@ -506,7 +687,7 @@ export default function AdminExpenses() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Muhasebe & Harcama Yönetimi</h1>
-            <p className="text-gray-600 mt-1">Villa, daire ve firma harcamalarını yönetin ve rapor alın</p>
+            <p className="text-gray-600 mt-1">Villalara yapılan harcamaları yönetin ve rapor alın</p>
           </div>
           <button
             onClick={() => setShowModal(true)}
@@ -599,7 +780,6 @@ export default function AdminExpenses() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
               >
                 <option value="all">Tümü</option>
-                <option value="other">Diğer (Firma Harcamaları)</option>
                 {properties.map(prop => (
                   <option key={prop.id} value={prop.id}>{prop.title}</option>
                 ))}
@@ -672,7 +852,7 @@ export default function AdminExpenses() {
                           {new Date(expense.expense_date).toLocaleDateString('tr-TR')}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {expense.property_id ? (expense.property?.title || 'Bilinmeyen') : 'Diğer (Firma Harcaması)'}
+                          {expense.property?.title || 'Bilinmeyen'}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
@@ -756,25 +936,6 @@ export default function AdminExpenses() {
             <div>
               <h3 className="font-semibold text-gray-700 mb-3">Villaya Göre</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {/* Diğer (Firma Harcamaları) */}
-                {(() => {
-                  const otherExpenses = filteredExpenses.filter(e => e.property_id === null);
-                  const otherTotal = otherExpenses.reduce((sum, e) => sum + e.amount, 0);
-                  if (otherExpenses.length > 0) {
-                    return (
-                      <div key="other" className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                        <span className="text-sm text-gray-700 truncate">Diğer (Firma Harcamaları)</span>
-                        <div className="text-right">
-                          <span className="text-sm font-semibold text-gray-900">
-                            ₺{otherTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                          <span className="text-xs text-gray-500 ml-2">({otherExpenses.length} kayıt)</span>
-                        </div>
-                      </div>
-                    );
-                  }
-                  return null;
-                })()}
                 {properties.map(prop => {
                   const propExpenses = filteredExpenses.filter(e => e.property_id === prop.id);
                   const propTotal = propExpenses.reduce((sum, e) => sum + e.amount, 0);
@@ -816,17 +977,38 @@ export default function AdminExpenses() {
 
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Villa</label>
-                  <select
-                    value={formData.property_id || ''}
-                    onChange={(e) => setFormData({ ...formData, property_id: e.target.value || null })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
-                  >
-                    <option value="">Diğer (Firma Harcaması)</option>
-                    {properties.map(prop => (
-                      <option key={prop.id} value={prop.id}>{prop.title}</option>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Villa/Ürün Seçimi</label>
+                  <div className="space-y-2">
+                    {selectedProperties.map((property, index) => (
+                      <PropertyAutocomplete
+                        key={index}
+                        properties={properties}
+                        value={property}
+                        onChange={(selected) => {
+                          const newProperties = [...selectedProperties];
+                          newProperties[index] = selected;
+                          
+                          // Eğer bir property seçildiyse ve bu son satırsa, yeni bir boş satır ekle
+                          if (selected.id !== null && index === selectedProperties.length - 1) {
+                            newProperties.push({ id: null, searchTerm: '' });
+                          }
+                          
+                          setSelectedProperties(newProperties);
+                        }}
+                        onRemove={() => {
+                          if (selectedProperties.length > 1) {
+                            setSelectedProperties(selectedProperties.filter((_, i) => i !== index));
+                          } else {
+                            setSelectedProperties([{ id: null, searchTerm: '' }]);
+                          }
+                        }}
+                        canRemove={selectedProperties.length > 1 || property.id !== null}
+                      />
                     ))}
-                  </select>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Ürün seçtikçe yeni satır otomatik açılacaktır. Boş satırlar kayıt edilmeyecektir.
+                  </p>
                 </div>
 
                 <div>
@@ -1269,126 +1451,126 @@ export default function AdminExpenses() {
             </div>
           )}
         </div>
-      </div>
 
-      {/* Ödeme Modal */}
-      {showPaymentModal && paymentAccount && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex justify-between items-center">
-                <h2 className="text-xl font-bold text-gray-900">Cari Hesap Ödemesi</h2>
-                <button
-                  onClick={() => {
-                    setShowPaymentModal(false);
-                    setPaymentAccount(null);
-                    setPaymentData({
-                      amount: '',
-                      description: '',
-                      payment_date: new Date().toISOString().split('T')[0],
-                    });
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <i className="ri-close-line text-2xl"></i>
-                </button>
-              </div>
-            </div>
-
-            <form onSubmit={handlePayment} className="p-6 space-y-4">
-              <div className="bg-gray-50 p-4 rounded-lg mb-4">
-                <p className="text-sm text-gray-600 mb-1">Cari Hesap</p>
-                <p className="font-semibold text-gray-900">
-                  {paymentAccount.user_role === 'company' 
-                    ? 'Aylin Villas' 
-                    : paymentAccount.user 
-                      ? `${paymentAccount.user.first_name} ${paymentAccount.user.last_name}`
-                      : 'Bilinmeyen'}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  {paymentAccount.user_role === 'company' 
-                    ? 'Firma Gelir Hesabı' 
-                    : paymentAccount.user?.email || ''}
-                </p>
-                <div className="mt-2 pt-2 border-t border-gray-200">
-                  <p className="text-sm text-gray-600">Mevcut Bakiye</p>
-                  <p className={`text-lg font-bold ${Number(paymentAccount.balance) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    ₺{Number(paymentAccount.balance).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
+        {/* Ödeme Modal */}
+        {showPaymentModal && paymentAccount && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+              <div className="p-6 border-b border-gray-200">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xl font-bold text-gray-900">Cari Hesap Ödemesi</h2>
+                  <button
+                    onClick={() => {
+                      setShowPaymentModal(false);
+                      setPaymentAccount(null);
+                      setPaymentData({
+                        amount: '',
+                        description: '',
+                        payment_date: new Date().toISOString().split('T')[0],
+                      });
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <i className="ri-close-line text-2xl"></i>
+                  </button>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Ödeme Tutarı (₺) *
-                </label>
-                <input
-                  type="number"
-                  required
-                  min="0.01"
-                  step="0.01"
-                  value={paymentData.amount}
-                  onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
-                  placeholder="0.00"
-                />
-              </div>
+              <form onSubmit={handlePayment} className="p-6 space-y-4">
+                <div className="bg-gray-50 p-4 rounded-lg mb-4">
+                  <p className="text-sm text-gray-600 mb-1">Cari Hesap</p>
+                  <p className="font-semibold text-gray-900">
+                    {paymentAccount.user_role === 'company' 
+                      ? 'Aylin Villas' 
+                      : paymentAccount.user 
+                        ? `${paymentAccount.user.first_name} ${paymentAccount.user.last_name}`
+                        : 'Bilinmeyen'}
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {paymentAccount.user_role === 'company' 
+                      ? 'Firma Gelir Hesabı' 
+                      : paymentAccount.user?.email || ''}
+                  </p>
+                  <div className="mt-2 pt-2 border-t border-gray-200">
+                    <p className="text-sm text-gray-600">Mevcut Bakiye</p>
+                    <p className={`text-lg font-bold ${Number(paymentAccount.balance) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      ₺{Number(paymentAccount.balance).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Ödeme Tarihi *
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={paymentData.payment_date}
-                  onChange={(e) => setPaymentData({ ...paymentData, payment_date: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Ödeme Tutarı (₺) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    step="0.01"
+                    value={paymentData.amount}
+                    onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                    placeholder="0.00"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Açıklama
-                </label>
-                <textarea
-                  value={paymentData.description}
-                  onChange={(e) => setPaymentData({ ...paymentData, description: e.target.value })}
-                  rows={3}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
-                  placeholder="Ödeme açıklaması (opsiyonel)"
-                />
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Ödeme Tarihi *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={paymentData.payment_date}
+                    onChange={(e) => setPaymentData({ ...paymentData, payment_date: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                  />
+                </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowPaymentModal(false);
-                    setPaymentAccount(null);
-                    setPaymentData({
-                      amount: '',
-                      description: '',
-                      payment_date: new Date().toISOString().split('T')[0],
-                    });
-                  }}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-                  disabled={processingPayment}
-                >
-                  İptal
-                </button>
-                <button
-                  type="submit"
-                  disabled={processingPayment}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
-                >
-                  {processingPayment ? 'Kaydediliyor...' : 'Ödemeyi Kaydet'}
-                </button>
-              </div>
-            </form>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Açıklama
+                  </label>
+                  <textarea
+                    value={paymentData.description}
+                    onChange={(e) => setPaymentData({ ...paymentData, description: e.target.value })}
+                    rows={3}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent"
+                    placeholder="Ödeme açıklaması (opsiyonel)"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPaymentModal(false);
+                      setPaymentAccount(null);
+                      setPaymentData({
+                        amount: '',
+                        description: '',
+                        payment_date: new Date().toISOString().split('T')[0],
+                      });
+                    }}
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                    disabled={processingPayment}
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={processingPayment}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+                  >
+                    {processingPayment ? 'Kaydediliyor...' : 'Ödemeyi Kaydet'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </AdminLayout>
   );
 }

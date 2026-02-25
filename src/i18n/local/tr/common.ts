@@ -31,6 +31,18 @@ export default {
   'footer.terms': 'Kullanım Şartları',
   'footer.privacy': 'Gizlilik Politikası',
   
+  // Rezervasyon
+  'booking.checkIn': 'Giriş',
+  'booking.checkOut': 'Çıkış',
+  'booking.guests': 'Misafirler',
+  'booking.adults': 'Yetişkin',
+  'booking.children': 'Çocuk',
+  'booking.makeReservation': 'Rezervasyon Yap',
+  'booking.total': 'Toplam',
+  'booking.cleaningFee': 'Temizlik ücreti',
+  'booking.deposit': 'Depozito',
+  'booking.selectDates': 'Tarihleri müsaitlik takviminden seçin',
+  
   // Ürün
   'property.pricePerNight': '/gece',
   'property.featured': 'Öne Çıkan Konaklama Yerleri',

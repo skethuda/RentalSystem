@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dbQuery, Booking, Property, LedgerAccount } from '../../../lib/supabase';
+import { dbQuery, Booking, Property } from '../../../lib/supabase';
 import AdminLayout from '../components/AdminLayout';
 
 interface Stats {
@@ -7,12 +7,11 @@ interface Stats {
   totalBookings: number;
   totalReviews: number;
   activeProperties: number;
-  totalBookingAmount: number;
-  companyRevenue: number;
 }
 
 interface BookingWithProperty extends Booking {
-  properties?: Property;
+  property?: Property;
+  guestName?: string;
 }
 
 export default function AdminDashboard() {
@@ -21,17 +20,14 @@ export default function AdminDashboard() {
     totalBookings: 0,
     totalReviews: 0,
     activeProperties: 0,
-    totalBookingAmount: 0,
-    companyRevenue: 0,
   });
   const [loading, setLoading] = useState(true);
-  const [upcomingBookings, setUpcomingBookings] = useState<BookingWithProperty[]>([]);
-  const [checkoutBookings, setCheckoutBookings] = useState<BookingWithProperty[]>([]);
+  const [upcomingCheckouts, setUpcomingCheckouts] = useState<BookingWithProperty[]>([]);
+  const [upcomingCheckins, setUpcomingCheckins] = useState<BookingWithProperty[]>([]);
+  const [recentBookings, setRecentBookings] = useState<BookingWithProperty[]>([]);
 
   useEffect(() => {
     loadStats();
-    loadUpcomingBookings();
-    loadCheckoutBookings();
   }, []);
 
   const loadStats = async () => {
@@ -41,44 +37,28 @@ export default function AdminDashboard() {
       const properties = await dbQuery('properties').select('id').execute();
       console.log('AdminDashboard: Properties:', properties.data?.length);
       
-      const bookings = await dbQuery('bookings').select('*').execute();
+      const bookings = await dbQuery('bookings').select('id').execute();
       console.log('AdminDashboard: Bookings:', bookings.data?.length);
       
       const activeProps = await dbQuery('properties').select('id').eq('is_available', true).execute();
       console.log('AdminDashboard: Active:', activeProps.data?.length);
-
-      // Toplam rezervasyon tutarı hesapla
-      const totalBookingAmount = (bookings.data || []).reduce((sum: number, booking: Booking) => {
-        return sum + (booking.total_amount || 0);
-      }, 0);
-
-      // Firma gelir durumu (company ledger account)
-      let companyRevenue = 0;
-      try {
-        const { data: companyAccount } = await dbQuery('ledger_accounts')
-          .select('*')
-          .eq('user_role', 'company')
-          .execute();
-        
-        if (companyAccount && companyAccount.length > 0) {
-          // user_id null olan firma hesabını bul
-          const firmAccount = companyAccount.find((acc: LedgerAccount) => acc.user_id === null);
-          if (firmAccount) {
-            companyRevenue = firmAccount.balance || 0;
-          }
-        }
-      } catch (error) {
-        console.error('Firma gelir durumu yüklenirken hata:', error);
-      }
 
       setStats({
         totalProperties: properties.data?.length || 0,
         totalBookings: bookings.data?.length || 0,
         totalReviews: 0, // reviews tablosu sorunlu olabilir
         activeProperties: activeProps.data?.length || 0,
-        totalBookingAmount,
-        companyRevenue,
       });
+
+      // Son 10 günde çıkış yapacaklar
+      await loadUpcomingCheckouts();
+      
+      // Yaklaşan girişler (sonraki 10 gün)
+      await loadUpcomingCheckins();
+      
+      // Son işlemler (son 10 rezervasyon)
+      await loadRecentBookings();
+
       console.log('AdminDashboard: İstatistikler yüklendi');
     } catch (error) {
       console.error('İstatistikler yüklenirken hata:', error);
@@ -87,80 +67,162 @@ export default function AdminDashboard() {
     }
   };
 
-  const loadUpcomingBookings = async () => {
+  const loadUpcomingCheckouts = async () => {
     try {
       const today = new Date();
       const tenDaysLater = new Date();
       tenDaysLater.setDate(today.getDate() + 10);
+      
+      const todayStr = today.toISOString().split('T')[0];
+      const tenDaysLaterStr = tenDaysLater.toISOString().split('T')[0];
 
       const { data: bookings, error } = await dbQuery('bookings')
         .select('*')
-        .gte('check_in_date', today.toISOString().split('T')[0])
-        .lte('check_in_date', tenDaysLater.toISOString().split('T')[0])
-        .in('status', ['pending', 'confirmed'])
-        .order('check_in_date', { ascending: true })
-        .limit(10)
-        .execute();
-
-      if (error) throw error;
-
-      // Her booking için property bilgisini al
-      const bookingsWithProperties = await Promise.all(
-        (bookings || []).map(async (booking: Booking) => {
-          const { data: property } = await dbQuery('properties')
-            .select('*')
-            .eq('id', booking.property_id)
-            .single()
-            .execute();
-          return {
-            ...booking,
-            properties: property
-          };
-        })
-      );
-
-      setUpcomingBookings(bookingsWithProperties);
-    } catch (error) {
-      console.error('Yaklaşan rezervasyonlar yüklenirken hata:', error);
-    }
-  };
-
-  const loadCheckoutBookings = async () => {
-    try {
-      const today = new Date();
-      const tenDaysLater = new Date();
-      tenDaysLater.setDate(today.getDate() + 10);
-
-      const { data: bookings, error } = await dbQuery('bookings')
-        .select('*')
-        .gte('check_out_date', today.toISOString().split('T')[0])
-        .lte('check_out_date', tenDaysLater.toISOString().split('T')[0])
-        .in('status', ['confirmed'])
+        .in('status', ['confirmed', 'pending'])
+        .gte('check_out_date', todayStr)
+        .lte('check_out_date', tenDaysLaterStr)
         .order('check_out_date', { ascending: true })
         .limit(10)
         .execute();
 
       if (error) throw error;
 
-      // Her booking için property bilgisini al
       const bookingsWithProperties = await Promise.all(
         (bookings || []).map(async (booking: Booking) => {
-          const { data: property } = await dbQuery('properties')
-            .select('*')
-            .eq('id', booking.property_id)
-            .single()
-            .execute();
-          return {
-            ...booking,
-            properties: property
-          };
+          try {
+            const { data: property } = await dbQuery('properties')
+              .select('*')
+              .eq('id', booking.property_id)
+              .single()
+              .execute();
+
+            return {
+              ...booking,
+              property: property || undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          } catch (error) {
+            return {
+              ...booking,
+              property: undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          }
         })
       );
 
-      setCheckoutBookings(bookingsWithProperties);
+      setUpcomingCheckouts(bookingsWithProperties);
     } catch (error) {
-      console.error('Çıkış yapılacak rezervasyonlar yüklenirken hata:', error);
+      console.error('Yaklaşan çıkışlar yüklenirken hata:', error);
     }
+  };
+
+  const loadUpcomingCheckins = async () => {
+    try {
+      const today = new Date();
+      const tenDaysLater = new Date();
+      tenDaysLater.setDate(today.getDate() + 10);
+      
+      const todayStr = today.toISOString().split('T')[0];
+      const tenDaysLaterStr = tenDaysLater.toISOString().split('T')[0];
+
+      const { data: bookings, error } = await dbQuery('bookings')
+        .select('*')
+        .in('status', ['confirmed', 'pending'])
+        .gte('check_in_date', todayStr)
+        .lte('check_in_date', tenDaysLaterStr)
+        .order('check_in_date', { ascending: true })
+        .limit(10)
+        .execute();
+
+      if (error) throw error;
+
+      const bookingsWithProperties = await Promise.all(
+        (bookings || []).map(async (booking: Booking) => {
+          try {
+            const { data: property } = await dbQuery('properties')
+              .select('*')
+              .eq('id', booking.property_id)
+              .single()
+              .execute();
+
+            return {
+              ...booking,
+              property: property || undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          } catch (error) {
+            return {
+              ...booking,
+              property: undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          }
+        })
+      );
+
+      setUpcomingCheckins(bookingsWithProperties);
+    } catch (error) {
+      console.error('Yaklaşan girişler yüklenirken hata:', error);
+    }
+  };
+
+  const loadRecentBookings = async () => {
+    try {
+      const { data: bookings, error } = await dbQuery('bookings')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10)
+        .execute();
+
+      if (error) throw error;
+
+      const bookingsWithProperties = await Promise.all(
+        (bookings || []).map(async (booking: Booking) => {
+          try {
+            const { data: property } = await dbQuery('properties')
+              .select('*')
+              .eq('id', booking.property_id)
+              .single()
+              .execute();
+
+            return {
+              ...booking,
+              property: property || undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          } catch (error) {
+            return {
+              ...booking,
+              property: undefined,
+              guestName: `${booking.first_name} ${booking.last_name}`
+            };
+          }
+        })
+      );
+
+      setRecentBookings(bookingsWithProperties);
+    } catch (error) {
+      console.error('Son rezervasyonlar yüklenirken hata:', error);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('tr-TR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  };
+
+  const getDaysUntil = (dateString: string) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const targetDate = new Date(dateString);
+    targetDate.setHours(0, 0, 0, 0);
+    const diffTime = targetDate.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
   };
 
   const statCards = [
@@ -171,25 +233,14 @@ export default function AdminDashboard() {
       color: 'bg-[#D4AF37]',
       bgColor: 'bg-[#FDF8E7]',
       textColor: 'text-[#B8960D]',
-      isAmount: false,
     },
     {
-      title: 'Toplam Rezervasyon Tutarı',
-      value: `₺${stats.totalBookingAmount.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      icon: 'ri-money-dollar-circle-line',
-      color: 'bg-blue-500',
-      bgColor: 'bg-blue-50',
-      textColor: 'text-blue-600',
-      isAmount: true,
-    },
-    {
-      title: 'Firma Gelir Durumu',
-      value: `₺${stats.companyRevenue.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      icon: 'ri-bank-line',
-      color: 'bg-green-500',
-      bgColor: 'bg-green-50',
-      textColor: 'text-green-600',
-      isAmount: true,
+      title: 'Aktif Konaklama',
+      value: stats.activeProperties,
+      icon: 'ri-checkbox-circle-line',
+      color: 'bg-emerald-500',
+      bgColor: 'bg-emerald-50',
+      textColor: 'text-emerald-600',
     },
     {
       title: 'Toplam Rezervasyon',
@@ -198,7 +249,14 @@ export default function AdminDashboard() {
       color: 'bg-orange-500',
       bgColor: 'bg-orange-50',
       textColor: 'text-orange-600',
-      isAmount: false,
+    },
+    {
+      title: 'Toplam Yorum',
+      value: stats.totalReviews,
+      icon: 'ri-star-line',
+      color: 'bg-amber-500',
+      bgColor: 'bg-amber-50',
+      textColor: 'text-amber-600',
     },
   ];
 
@@ -226,114 +284,152 @@ export default function AdminDashboard() {
                     <i className={`${stat.icon} text-2xl ${stat.textColor}`}></i>
                   </div>
                 </div>
-                <h3 className={`${stat.isAmount ? 'text-xl' : 'text-2xl'} font-bold text-gray-900 mb-1`}>{stat.value}</h3>
+                <h3 className="text-2xl font-bold text-gray-900 mb-1">{stat.value}</h3>
                 <p className="text-sm text-gray-600">{stat.title}</p>
               </div>
             ))}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            {/* Yaklaşan Rezervasyonlar */}
+            {/* Son 10 Günde Çıkış Yapacaklar */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <i className="ri-calendar-event-line text-[#D4AF37]"></i>
-                Son 10 Gün İçinde Yaklaşan Rezervasyonlar
+                <i className="ri-logout-box-line text-orange-500"></i>
+                Son 10 Günde Çıkış Yapacaklar
               </h2>
-              {upcomingBookings.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <i className="ri-calendar-line text-4xl mb-2"></i>
-                  <p>Yaklaşan rezervasyon bulunmuyor</p>
-                </div>
+              {upcomingCheckouts.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">Yaklaşan çıkış bulunmuyor</p>
               ) : (
                 <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {upcomingBookings.map((booking) => (
-                    <div
-                      key={booking.id}
-                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <p className="font-medium text-gray-900">
-                            {booking.first_name} {booking.last_name}
-                          </p>
-                          <p className="text-sm text-gray-600">{booking.properties?.title}</p>
-                        </div>
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          booking.status === 'confirmed' 
-                            ? 'bg-green-100 text-green-700' 
-                            : 'bg-yellow-100 text-yellow-700'
-                        }`}>
-                          {booking.status === 'confirmed' ? 'Onaylandı' : 'Beklemede'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-600">
-                        <div className="flex items-center gap-1">
-                          <i className="ri-calendar-check-line"></i>
-                          <span>{new Date(booking.check_in_date).toLocaleDateString('tr-TR')}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <i className="ri-calendar-close-line"></i>
-                          <span>{new Date(booking.check_out_date).toLocaleDateString('tr-TR')}</span>
+                  {upcomingCheckouts.map((booking) => {
+                    const daysUntil = getDaysUntil(booking.check_out_date);
+                    return (
+                      <div
+                        key={booking.id}
+                        className="p-3 bg-orange-50 rounded-lg border border-orange-100 hover:bg-orange-100 transition-colors"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{booking.guestName}</p>
+                            <p className="text-sm text-gray-600">{booking.property?.title || 'Bilinmeyen Villa'}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Çıkış: {formatDate(booking.check_out_date)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className={`text-xs font-medium px-2 py-1 rounded ${
+                              daysUntil <= 3 ? 'bg-red-100 text-red-700' :
+                              daysUntil <= 7 ? 'bg-orange-100 text-orange-700' :
+                              'bg-green-100 text-green-700'
+                            }`}>
+                              {daysUntil === 0 ? 'Bugün' : `${daysUntil} gün`}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <div className="mt-2 text-sm font-medium text-gray-900">
-                        ₺{Number(booking.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            {/* Çıkış Yapılacak Rezervasyonlar */}
+            {/* Yaklaşan Girişler */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <i className="ri-logout-box-line text-orange-500"></i>
-                Son 10 Gün İçinde Çıkış Yapılacak Rezervasyonlar
+                <i className="ri-login-box-line text-emerald-500"></i>
+                Yaklaşan Girişler (10 Gün)
               </h2>
-              {checkoutBookings.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <i className="ri-calendar-line text-4xl mb-2"></i>
-                  <p>Çıkış yapılacak rezervasyon bulunmuyor</p>
-                </div>
+              {upcomingCheckins.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">Yaklaşan giriş bulunmuyor</p>
               ) : (
                 <div className="space-y-3 max-h-96 overflow-y-auto">
-                  {checkoutBookings.map((booking) => (
-                    <div
-                      key={booking.id}
-                      className="p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <p className="font-medium text-gray-900">
-                            {booking.first_name} {booking.last_name}
-                          </p>
-                          <p className="text-sm text-gray-600">{booking.properties?.title}</p>
-                        </div>
-                        <span className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">
-                          Çıkış
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-sm text-gray-600">
-                        <div className="flex items-center gap-1">
-                          <i className="ri-calendar-check-line"></i>
-                          <span>{new Date(booking.check_in_date).toLocaleDateString('tr-TR')}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <i className="ri-calendar-close-line"></i>
-                          <span className="font-medium text-orange-600">
-                            {new Date(booking.check_out_date).toLocaleDateString('tr-TR')}
-                          </span>
+                  {upcomingCheckins.map((booking) => {
+                    const daysUntil = getDaysUntil(booking.check_in_date);
+                    return (
+                      <div
+                        key={booking.id}
+                        className="p-3 bg-emerald-50 rounded-lg border border-emerald-100 hover:bg-emerald-100 transition-colors"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{booking.guestName}</p>
+                            <p className="text-sm text-gray-600">{booking.property?.title || 'Bilinmeyen Villa'}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Giriş: {formatDate(booking.check_in_date)}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className={`text-xs font-medium px-2 py-1 rounded ${
+                              daysUntil <= 3 ? 'bg-red-100 text-red-700' :
+                              daysUntil <= 7 ? 'bg-orange-100 text-orange-700' :
+                              'bg-green-100 text-green-700'
+                            }`}>
+                              {daysUntil === 0 ? 'Bugün' : `${daysUntil} gün`}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                      <div className="mt-2 text-sm font-medium text-gray-900">
-                        ₺{Number(booking.total_amount).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Son İşlemler */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <i className="ri-time-line text-[#D4AF37]"></i>
+              Son İşlemler
+            </h2>
+            {recentBookings.length === 0 ? (
+              <p className="text-sm text-gray-500 text-center py-4">Henüz işlem bulunmuyor</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Misafir</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Villa</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Giriş</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Çıkış</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Tutar</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Durum</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Tarih</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {recentBookings.map((booking) => (
+                      <tr key={booking.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm text-gray-900">{booking.guestName}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{booking.property?.title || 'Bilinmeyen'}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{formatDate(booking.check_in_date)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{formatDate(booking.check_out_date)}</td>
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                          ₺{booking.total_amount?.toLocaleString('tr-TR') || '0'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-1 text-xs font-medium rounded ${
+                            booking.status === 'confirmed' ? 'bg-green-100 text-green-700' :
+                            booking.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                            booking.status === 'completed' ? 'bg-blue-100 text-blue-700' :
+                            'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {booking.status === 'confirmed' ? 'Onaylandı' :
+                             booking.status === 'cancelled' ? 'İptal' :
+                             booking.status === 'completed' ? 'Tamamlandı' :
+                             'Beklemede'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-500">
+                          {booking.created_at ? formatDate(booking.created_at) : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

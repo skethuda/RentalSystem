@@ -90,7 +90,6 @@ export default function BookingModal({
       // Rezervasyon oluştur
       const bookingData: any = {
         property_id: property.id,
-        user_id: user && appUser ? appUser.id : null,
         first_name: formData.firstName,
         last_name: formData.lastName,
         email: formData.email,
@@ -101,7 +100,6 @@ export default function BookingModal({
         children,
         special_requests: formData.specialRequests || null,
         total_amount: totalAmount,
-        source: 'web', // Web sitesinden gelen rezervasyonlar
         status: 'pending'
       };
 

@@ -650,7 +650,7 @@ export interface SiteSettings {
 }
 
 // Kullanıcı Tipleri
-export type UserRole = 'admin' | 'supplier' | 'agent' | 'realtor' | 'member';
+export type UserRole = 'admin' | 'supplier' | 'agent' | 'member';
 
 export interface AppUser {
   id: string;
@@ -660,13 +660,13 @@ export interface AppUser {
   last_name: string;
   phone?: string;
   role: UserRole;
-  company_name?: string; // Tedarikçi/Aracı/Emlakçı için
+  company_name?: string; // Tedarikçi/Aracı için
   tax_number?: string; // Tedarikçi için
   address?: string;
   notes?: string;
-  commission_rate?: number; // Emlakçı/Aracı/Tedarikçi komisyon oranı (yüzde olarak, örn: 10 = %10)
+  commission_rate?: number; // Komisyon oranı (yüzde)
   is_active: boolean;
-  is_approved: boolean; // Tedarikçi/Aracı/Emlakçı onay durumu
+  is_approved: boolean; // Tedarikçi/Aracı onay durumu
   created_at?: string;
   updated_at?: string;
 }
@@ -674,7 +674,7 @@ export interface AppUser {
 // Harcama/Muhasebe
 export interface Expense {
   id?: string;
-  property_id: string | null; // null ise "Diğer" (firma harcaması)
+  property_id: string;
   expense_type: 'electricity' | 'water' | 'maintenance' | 'cleaning' | 'other';
   description: string;
   amount: number;
@@ -707,25 +707,17 @@ export interface SupplierApplication {
   updated_at?: string;
 }
 
-// Kullanıcı Rolleri
-export const USER_ROLES = [
-  { value: 'admin', label: 'Admin', icon: 'ri-shield-user-line', color: 'red' },
-  { value: 'supplier', label: 'Tedarikçi', icon: 'ri-home-gear-line', color: 'blue' },
-  { value: 'agent', label: 'Aracı', icon: 'ri-user-star-line', color: 'purple' },
-  { value: 'realtor', label: 'Emlakçı', icon: 'ri-building-line', color: 'orange' },
-  { value: 'member', label: 'Üye', icon: 'ri-user-line', color: 'green' },
-];
-
-// Cari Hesap Sistemi
+// Cari Hesap
 export interface LedgerAccount {
   id?: string;
-  user_id: string | null;
+  user_id?: string | null; // null ise firma cari hesabı
   user_role: 'supplier' | 'agent' | 'realtor' | 'company';
   balance: number;
   created_at?: string;
   updated_at?: string;
 }
 
+// Cari İşlem
 export interface LedgerTransaction {
   id?: string;
   account_id: string;
@@ -736,5 +728,12 @@ export interface LedgerTransaction {
   commission_rate?: number;
   commission_base?: number;
   created_at?: string;
-  created_by?: string;
 }
+
+// Kullanıcı Rolleri
+export const USER_ROLES = [
+  { value: 'admin', label: 'Admin', icon: 'ri-shield-user-line', color: 'red' },
+  { value: 'supplier', label: 'Tedarikçi', icon: 'ri-home-gear-line', color: 'blue' },
+  { value: 'agent', label: 'Aracı', icon: 'ri-user-star-line', color: 'purple' },
+  { value: 'member', label: 'Üye', icon: 'ri-user-line', color: 'green' },
+];

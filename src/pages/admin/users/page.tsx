@@ -29,7 +29,6 @@ export default function AdminUsers() {
     tax_number: '',
     address: '',
     notes: '',
-    commission_rate: '',
     is_active: true,
     is_approved: true
   });
@@ -111,7 +110,6 @@ export default function AdminUsers() {
         tax_number: formData.tax_number || null,
         address: formData.address || null,
         notes: formData.notes || null,
-        commission_rate: (formData.role === 'realtor' || formData.role === 'agent' || formData.role === 'supplier') && formData.commission_rate ? parseFloat(formData.commission_rate) : null,
         is_active: formData.is_active,
         is_approved: formData.is_approved
       };
@@ -152,7 +150,6 @@ export default function AdminUsers() {
       tax_number: user.tax_number || '',
       address: user.address || '',
       notes: user.notes || '',
-      commission_rate: user.commission_rate ? user.commission_rate.toString() : '',
       is_active: user.is_active,
       is_approved: user.is_approved
     });
@@ -163,9 +160,10 @@ export default function AdminUsers() {
     if (!confirm('Bu kullanıcıyı silmek istediğinizden emin misiniz?')) return;
 
     try {
-      const { error } = await dbQuery('app_users')
-        .eq('id', id)
-        .delete();
+      const { error } = await supabase
+        .from('app_users')
+        .delete()
+        .eq('id', id);
 
       if (error) throw error;
       loadUsers();
@@ -177,9 +175,10 @@ export default function AdminUsers() {
 
   const toggleActive = async (user: AppUser) => {
     try {
-      const { error } = await dbQuery('app_users')
-        .eq('id', user.id)
-        .update({ is_active: !user.is_active });
+      const { error } = await supabase
+        .from('app_users')
+        .update({ is_active: !user.is_active })
+        .eq('id', user.id);
 
       if (error) throw error;
       loadUsers();
@@ -190,9 +189,10 @@ export default function AdminUsers() {
 
   const toggleApproved = async (user: AppUser) => {
     try {
-      const { error } = await dbQuery('app_users')
-        .eq('id', user.id)
-        .update({ is_approved: !user.is_approved });
+      const { error } = await supabase
+        .from('app_users')
+        .update({ is_approved: !user.is_approved })
+        .eq('id', user.id);
 
       if (error) throw error;
       loadUsers();
@@ -213,7 +213,6 @@ export default function AdminUsers() {
       tax_number: '',
       address: '',
       notes: '',
-      commission_rate: '',
       is_active: true,
       is_approved: true
     });
@@ -241,7 +240,7 @@ export default function AdminUsers() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Kullanıcı Yönetimi</h1>
-            <p className="text-gray-600 mt-1">Tedarikçi, aracı, emlakçı ve üyeleri yönetin</p>
+            <p className="text-gray-600 mt-1">Tedarikçi, aracı ve üyeleri yönetin</p>
           </div>
           <button
             onClick={openNewModal}
@@ -351,7 +350,7 @@ export default function AdminUsers() {
                           >
                             {user.is_active ? 'Aktif' : 'Pasif'}
                           </button>
-                          {(user.role === 'supplier' || user.role === 'agent' || user.role === 'realtor') && (
+                          {(user.role === 'supplier' || user.role === 'agent') && (
                             <button
                               onClick={() => toggleApproved(user)}
                               className={`text-xs px-2 py-1 rounded ${
@@ -376,18 +375,6 @@ export default function AdminUsers() {
                             >
                               <i className="ri-home-4-line"></i>
                             </button>
-                          )}
-                          {/* Emlakçı, Aracı ve Tedarikçi için Komisyon Bilgisi */}
-                          {(user.role === 'realtor' || user.role === 'agent' || user.role === 'supplier') && user.commission_rate && (
-                            <span className={`px-2 py-1 text-xs font-medium rounded ${
-                              user.role === 'realtor' 
-                                ? 'text-orange-700 bg-orange-100' 
-                                : user.role === 'agent'
-                                ? 'text-purple-700 bg-purple-100'
-                                : 'text-blue-700 bg-blue-100'
-                            }`} title="Komisyon Oranı">
-                              %{user.commission_rate}
-                            </span>
                           )}
                           <button
                             onClick={() => handleEdit(user)}
@@ -499,7 +486,7 @@ export default function AdminUsers() {
                 </div>
               </div>
 
-              {(formData.role === 'supplier' || formData.role === 'agent' || formData.role === 'realtor') && (
+              {(formData.role === 'supplier' || formData.role === 'agent') && (
                 <>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -530,29 +517,6 @@ export default function AdminUsers() {
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4AF37]"
                     />
                   </div>
-                  {(formData.role === 'realtor' || formData.role === 'agent' || formData.role === 'supplier') && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Komisyon Oranı (%) *</label>
-                      <input
-                        type="number"
-                        value={formData.commission_rate}
-                        onChange={(e) => setFormData({ ...formData, commission_rate: e.target.value })}
-                        placeholder="Örn: 10 (yüzde 10 için)"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        required
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#D4AF37]"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        {formData.role === 'realtor' 
-                          ? 'Emlakçıya ödenecek komisyon oranını yüzde olarak girin (örn: 10 = %10)'
-                          : formData.role === 'agent'
-                          ? 'Aracıya ödenecek komisyon oranını yüzde olarak girin (örn: 10 = %10)'
-                          : 'Tedarikçiye ödenecek komisyon oranını yüzde olarak girin (örn: 10 = %10)'}
-                      </p>
-                    </div>
-                  )}
                 </>
               )}
 
@@ -576,7 +540,7 @@ export default function AdminUsers() {
                   />
                   <span className="text-sm font-medium text-gray-700">Aktif Kullanıcı</span>
                 </label>
-                {(formData.role === 'supplier' || formData.role === 'agent' || formData.role === 'realtor') && (
+                {(formData.role === 'supplier' || formData.role === 'agent') && (
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
